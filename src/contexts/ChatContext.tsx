@@ -36,6 +36,7 @@ import {
   hasSeqGap,
   pruneRunRegistry,
   resolveRunId,
+  createFallbackRunId,
   updateHighestSeq,
 } from '@/features/chat/operations';
 import { generateMsgId } from '@/features/chat/types';
@@ -391,10 +392,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             if (msg.isThinking) return true;
             // Always keep tool groups / intermediate tool messages
             if (msg.toolGroup || msg.intermediate) return true;
-            // Drop assistant text that's a substring of the active stream buffer
-            // (this is the partial text the streaming bubble is already rendering)
+            // Drop assistant text that duplicates the active stream buffer.
+            // Require minimum length to avoid suppressing short legitimate messages
+            // like "Yes." or "Done" that could be common substrings.
             const text = (msg.rawText || '').trim();
-            if (text && activeBuffer.includes(text)) return false;
+            if (text.length >= 20 && activeBuffer.includes(text)) return false;
+            // For short texts, require exact match with the buffer (normalized).
+            if (text && text.length < 20 && activeBuffer.trim() === text) return false;
             return true;
           })
           : recovered;
@@ -625,10 +629,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // ── Chat events ───────────────────────────────────────────────────────
       const cp = classified.chatPayload!;
       const activeRunBefore = activeRunIdRef.current;
-      const runId = resolveRunId(classified.runId, activeRunBefore);
-
-      // If no runId and no active run, ignore orphan event to prevent phantom run entries.
-      if (!runId) return;
+      const runId = resolveRunId(classified.runId, activeRunBefore)
+        // Fallback: no runId on event and no active run — create a local run
+        // so reconnect/mid-stream-join scenarios aren't silently dropped.
+        ?? createFallbackRunId(currentSessionRef.current);
 
       const run = getOrCreateRunState(runsRef.current, runId, currentSessionRef.current);
       run.lastFrameSeq = updateHighestSeq(run.lastFrameSeq, classified.frameSeq);
@@ -831,8 +835,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           setStream(prev => ({ ...prev, html: '', runId: undefined }));
         }
 
-        // Attempt to load whatever partial transcript exists on the gateway.
-        triggerRecovery('unrenderable-final');
+        // Only recover for the active run — stale errors from background runs
+        // should not mutate the visible transcript.
+        if (isActiveRun) {
+          triggerRecovery('unrenderable-final');
+        }
 
         thinkingStartRef.current = null;
         thinkingDurationRef.current = null;
