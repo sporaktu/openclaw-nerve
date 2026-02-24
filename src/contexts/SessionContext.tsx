@@ -441,6 +441,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             } else if (phase === 'end') {
               setGranularStatus(sk, { status: 'DONE', since: Date.now() });
               refreshSessions();
+              setTimeout(() => refreshSessions(), 1500);
             } else if (phase === 'error') {
               setGranularStatus(sk, { status: 'ERROR', since: Date.now() });
               refreshSessions();
@@ -474,6 +475,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           } else if (state === 'final') {
             setGranularStatus(sk, { status: 'DONE', since: Date.now() });
             refreshSessions();
+            // Delayed refresh to catch token counts that may not be available immediately.
+            setTimeout(() => refreshSessions(), 1500);
           } else if (state === 'error') {
             setGranularStatus(sk, { status: 'ERROR', since: Date.now() });
           } else if (state === 'aborted') {
