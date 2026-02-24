@@ -535,6 +535,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           setLastEventTimestamp(0);
           if (soundEnabledRef.current) playPing();
 
+          // Invalidate stale in-flight recovery before scheduling lifecycle recovery.
+          recoveryGenerationRef.current += 1;
+
           // CLI agents (Codex, Claude Code CLI) only emit lifecycle_end, not chat_final.
           // If the active run wasn't finalized via chat_final, trigger recovery to load
           // the final transcript.
@@ -543,6 +546,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           if (!runFinalized) {
             triggerRecovery('reconnect');
           }
+
+          // lifecycle_end ends the turn for CLI streams even without chat_final.
+          // Clear stale active-run marker to avoid reconnect false positives.
+          activeRunIdRef.current = null;
           return;
         }
 
@@ -806,6 +813,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     lastMessageWasVoiceRef.current = text.startsWith('[voice] ');
 
     const { msg: userMsg, tempId } = buildUserMessage({ text, images });
+
+    // Invalidate stale recoveries before adding new-turn optimistic state.
+    recoveryGenerationRef.current += 1;
 
     // Optimistic insert — sync both full buffer and visible slice
     allMessagesRef.current = [...allMessagesRef.current, userMsg];
