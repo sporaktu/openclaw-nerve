@@ -275,13 +275,15 @@ function createGatewayRelay(
           gatewayCall(msg.method, msg.params || {})
             .then((result) => {
               if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({ type: 'res', id: reqId, result }));
+                clientWs.send(JSON.stringify({ type: 'res', id: reqId, ok: true, payload: result }));
               }
             })
             .catch((err) => {
               if (clientWs.readyState === WebSocket.OPEN) {
                 clientWs.send(JSON.stringify({
-                  type: 'res', id: reqId,
+                  type: 'res',
+                  id: reqId,
+                  ok: false,
                   error: { code: -32000, message: (err as Error).message },
                 }));
               }
@@ -310,7 +312,7 @@ function createGatewayRelay(
  * Inject Nerve's device identity into a connect request.
  */
 interface ConnectParams {
-  client?: { id?: string; mode?: string };
+  client?: { id?: string; mode?: string; instanceId?: string; [key: string]: unknown };
   role?: string;
   scopes?: string[];
   auth?: { token?: string };

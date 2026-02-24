@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
-import type { ProcessingStage, ActivityLogEntry } from '@/contexts/ChatContext';
+import type { ProcessingStage, ActivityLogEntry, ChatStreamState } from '@/contexts/ChatContext';
 import { ToolCallBlock } from './ToolCallBlock';
 import { MessageBubble } from './MessageBubble';
 import { InputBar, type InputBarHandle } from './InputBar';
@@ -14,7 +14,7 @@ interface ChatPanelProps {
   onSend: (text: string, attachments?: ImageAttachment[]) => void;
   onAbort: () => void;
   isGenerating: boolean;
-  streamingHtml: string;
+  stream: ChatStreamState;
   processingStage?: ProcessingStage;
   lastEventTimestamp?: number;
   currentToolDescription?: string | null;
@@ -42,7 +42,7 @@ export interface ChatPanelHandle {
 /** Main chat panel with message list, infinite scroll, search, and input bar. */
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel({
   messages,
-  onSend, onAbort, isGenerating, streamingHtml,
+  onSend, onAbort, isGenerating, stream,
   processingStage,
   lastEventTimestamp = 0, currentToolDescription = null, activityLog = [],
   onWakeWordState, onReset, searchOpen, onSearchClose, id, agentName = 'Agent',
@@ -138,7 +138,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
     }
   }, [autoScroll]);
 
-  useEffect(scrollToBottom, [messages, streamingHtml, scrollToBottom]);
+  useEffect(scrollToBottom, [messages, stream.html, scrollToBottom]);
 
   // NOTE: Cmd+F and Escape are now handled globally in App.tsx via useKeyboardShortcuts
 
@@ -309,20 +309,22 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
         })}
 
         {/* Processing indicator — visible while generating, persists during streaming */}
-        {isGenerating && !streamingHtml && (
+        {isGenerating && !stream.html && (
           <ProcessingIndicator
             stage={processingStage}
             elapsedMs={processingTime}
             lastEventTimestamp={lastEventTimestamp}
             currentToolDescription={currentToolDescription}
             activityLog={activityLog}
+            isRecovering={Boolean(stream.isRecovering)}
+            recoveryReason={stream.recoveryReason}
           />
         )}
 
         {/* Streaming message with condensed activity log */}
-        {isGenerating && streamingHtml && (
+        {isGenerating && stream.html && (
           <>
-            <StreamingMessage html={streamingHtml} elapsedMs={processingTime} agentName={agentName} />
+            <StreamingMessage html={stream.html} elapsedMs={processingTime} agentName={agentName} />
             {activityLog.length > 0 && (
               <div className="px-4 pb-2" style={{ paddingLeft: '2rem' }}>
                 <ActivityLog entries={activityLog} />

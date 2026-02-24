@@ -1,6 +1,6 @@
 /**
  * ChatContext - Manages chat state, messaging, and streaming
- * 
+ *
  * This context is a thin wrapper that wires pure operation functions
  * (from @/features/chat/operations/) to React state.
  *
@@ -14,29 +14,44 @@ import { createContext, useContext, useCallback, useRef, useEffect, useState, us
 import { useGateway } from './GatewayContext';
 import { useSessionContext } from './SessionContext';
 import { useSettings } from './SettingsContext';
-import type { ChatMsg } from '@/features/chat/types';
 import type { GatewayEvent } from '@/types';
 import { renderMarkdown, renderToolResults } from '@/utils/helpers';
 import { playPing } from '@/features/voice/audio-feedback';
 import {
   loadChatHistory,
-  splitToolCallMessage,
+  processChatMessages,
   buildUserMessage,
   sendChatMessage,
   classifyStreamEvent,
   extractStreamDelta,
   extractFinalMessage,
+  extractFinalMessages,
   buildActivityLogEntry,
   markToolCompleted,
   appendActivityEntry,
   deriveProcessingStage,
   isActiveAgentState,
+  mergeRecoveredTail,
+  getOrCreateRunState,
+  hasSeqGap,
+  pruneRunRegistry,
+  resolveRunId,
+  updateHighestSeq,
 } from '@/features/chat/operations';
-import type { ImageAttachment } from '@/features/chat/types';
+import type { ImageAttachment, ChatMsg } from '@/features/chat/types';
+import type { RecoveryReason, RunState } from '@/features/chat/operations';
 
 // ─── Voice TTS fallback helper ─────────────────────────────────────────────────
 
 const FALLBACK_MAX_CHARS = 300;
+const DEFAULT_VISIBLE_COUNT = 50;
+
+const RECOVERY_LIMITS: Record<RecoveryReason, number> = {
+  'unrenderable-final': 40,
+  'frame-gap': 80,
+  'chat-gap': 80,
+  reconnect: 120,
+};
 
 /** Strip code blocks, markdown noise, and validate text is speakable for TTS fallback. */
 function buildVoiceFallbackText(raw: string): string | null {
@@ -62,6 +77,63 @@ function buildVoiceFallbackText(raw: string): string | null {
   return text;
 }
 
+function normalizeComparableText(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+function isLikelyDuplicateMessage(a: ChatMsg, b: ChatMsg): boolean {
+  return (
+    a.role === b.role &&
+    normalizeComparableText(a.rawText) === normalizeComparableText(b.rawText) &&
+    Boolean(a.isThinking) === Boolean(b.isThinking) &&
+    (a.toolGroup?.length || 0) === (b.toolGroup?.length || 0) &&
+    (a.images?.length || 0) === (b.images?.length || 0)
+  );
+}
+
+function mergeFinalMessages(existing: ChatMsg[], incoming: ChatMsg[]): ChatMsg[] {
+  if (incoming.length === 0) return existing;
+  const merged = [...existing];
+
+  for (const msg of incoming) {
+    const last = merged[merged.length - 1];
+
+    if (last && isLikelyDuplicateMessage(last, msg)) {
+      merged[merged.length - 1] = msg;
+      continue;
+    }
+
+    // Avoid duplicating optimistic user bubbles if final payload repeats them.
+    if (msg.role === 'user') {
+      const recent = merged.slice(-6);
+      const duplicateRecentUser = recent.some(
+        (m) => m.role === 'user' && normalizeComparableText(m.rawText) === normalizeComparableText(msg.rawText),
+      );
+      if (duplicateRecentUser) continue;
+    }
+
+    merged.push(msg);
+  }
+
+  return merged;
+}
+
+function patchThinkingDuration(messages: ChatMsg[], durationMs: number): ChatMsg[] {
+  if (!durationMs || durationMs <= 0) return messages;
+
+  const updated = [...messages];
+  const lastUserIdx = updated.reduce((acc, m, i) => (m.role === 'user' ? i : acc), -1);
+
+  for (let i = updated.length - 1; i > lastUserIdx; i--) {
+    if (updated[i].role === 'assistant' && updated[i].isThinking) {
+      updated[i] = { ...updated[i], thinkingDurationMs: durationMs };
+      return updated;
+    }
+  }
+
+  return messages;
+}
+
 /** Processing stages for enhanced thinking indicator */
 export type ProcessingStage = 'thinking' | 'tool_use' | 'streaming' | null;
 
@@ -75,10 +147,17 @@ export interface ActivityLogEntry {
   phase: 'running' | 'completed';
 }
 
+export interface ChatStreamState {
+  html: string;
+  runId?: string;
+  isRecovering?: boolean;
+  recoveryReason?: RecoveryReason | null;
+}
+
 interface ChatContextValue {
   messages: ChatMsg[];
   isGenerating: boolean;
-  streamingHtml: string;
+  stream: ChatStreamState;
   processingStage: ProcessingStage;
   lastEventTimestamp: number;
   activityLog: ActivityLogEntry[];
@@ -99,25 +178,47 @@ interface ChatContextValue {
 
 const ChatContext = createContext<ChatContextValue | null>(null);
 
+interface StreamFlushState {
+  runId: string | null;
+  text: string;
+  rafId: number | null;
+  timeoutId: ReturnType<typeof setTimeout> | null;
+}
+
+interface RecoveryState {
+  timer: ReturnType<typeof setTimeout> | null;
+  inFlight: boolean;
+  reason: RecoveryReason | null;
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { connectionState, rpc, subscribe } = useGateway();
   const { currentSession } = useSessionContext();
   const { soundEnabled, speak } = useSettings();
+
   const [messages, setMessages] = useState<ChatMsg[]>([]);
-  // Full history buffer + visible window for infinite scroll
-  const allMessagesRef = useRef<ChatMsg[]>([]);
-  const [visibleCount, setVisibleCount] = useState(50);
+  const [visibleCount, setVisibleCount] = useState(DEFAULT_VISIBLE_COUNT);
   const [hasMore, setHasMore] = useState(false);
-  const LOAD_MORE_BATCH = 30;
   const [isGenerating, setIsGenerating] = useState(false);
-  const [streamingHtml, setStreamingHtml] = useState('');
+  const [stream, setStream] = useState<ChatStreamState>({ html: '', isRecovering: false, recoveryReason: null });
   const [processingStage, setProcessingStage] = useState<ProcessingStage>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [lastEventTimestamp, setLastEventTimestamp] = useState<number>(0);
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
 
-  const streamBufferRef = useRef('');
-  const rafIdRef = useRef<number | null>(null);
+  // Full history buffer + visible window for infinite scroll
+  const allMessagesRef = useRef<ChatMsg[]>([]);
+  const visibleCountRef = useRef(DEFAULT_VISIBLE_COUNT);
+  const LOAD_MORE_BATCH = 30;
+
+  const runsRef = useRef<Map<string, RunState>>(new Map());
+  const activeRunIdRef = useRef<string | null>(null);
+  const lastGatewaySeqRef = useRef<number | null>(null);
+  const lastChatSeqRef = useRef<number | null>(null);
+
+  const streamFlushRef = useRef<StreamFlushState>({ runId: null, text: '', rafId: null, timeoutId: null });
+  const recoveryRef = useRef<RecoveryState>({ timer: null, inFlight: false, reason: null });
+
   const playedSoundsRef = useRef<Set<string>>(new Set());
 
   // Voice message tracking for TTS fallback
@@ -127,9 +228,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const thinkingStartRef = useRef<number | null>(null);
   const thinkingDurationRef = useRef<number | null>(null);
   const thinkingRunIdRef = useRef<string | null>(null);
-
-  // Abort controller for in-flight history polls — lets chat_final cancel stale polls
-  const pollAbortRef = useRef<AbortController | null>(null);
 
   // Refs for stable callback references — synced in a single effect
   const currentSessionRef = useRef(currentSession);
@@ -142,7 +240,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     isGeneratingRef.current = isGenerating;
     soundEnabledRef.current = soundEnabled;
     speakRef.current = speak;
-  }, [currentSession, isGenerating, soundEnabled, speak]);
+    visibleCountRef.current = visibleCount;
+  }, [currentSession, isGenerating, soundEnabled, speak, visibleCount]);
 
   // Derive currentToolDescription from activityLog — no separate state needed
   const currentToolDescription = useMemo(() => {
@@ -150,42 +249,130 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return lastRunning ? lastRunning.description : null;
   }, [activityLog]);
 
-  const scheduleStreamingUpdate = useCallback((text: string) => {
-    streamBufferRef.current = text;
-    if (rafIdRef.current !== null) return;
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null;
-      const current = streamBufferRef.current;
-      setStreamingHtml(renderToolResults(renderMarkdown(current, { highlight: false })));
-    });
+  const applyMessageWindow = useCallback((all: ChatMsg[], resetVisibleWindow = false) => {
+    allMessagesRef.current = all;
+
+    if (resetVisibleWindow) {
+      const nextVisible = all.length <= DEFAULT_VISIBLE_COUNT ? all.length : DEFAULT_VISIBLE_COUNT;
+      setVisibleCount(nextVisible);
+      visibleCountRef.current = nextVisible;
+      setHasMore(all.length > nextVisible);
+      setMessages(all.slice(-nextVisible));
+      return;
+    }
+
+    const currentVisible = Math.min(visibleCountRef.current, all.length);
+    setHasMore(all.length > currentVisible);
+    setMessages(all.slice(-currentVisible));
   }, []);
 
-  // Cleanup streaming RAF on unmount
+  const clearScheduledStreamFlush = useCallback(() => {
+    const flush = streamFlushRef.current;
+    if (flush.rafId !== null) {
+      cancelAnimationFrame(flush.rafId);
+      flush.rafId = null;
+    }
+    if (flush.timeoutId) {
+      clearTimeout(flush.timeoutId);
+      flush.timeoutId = null;
+    }
+  }, []);
+
+  const flushStreamingUpdate = useCallback(() => {
+    const flush = streamFlushRef.current;
+    clearScheduledStreamFlush();
+
+    const html = renderToolResults(renderMarkdown(flush.text, { highlight: false }));
+    setStream(prev => ({
+      ...prev,
+      html,
+      runId: flush.runId || undefined,
+    }));
+  }, [clearScheduledStreamFlush]);
+
+  const scheduleStreamingUpdate = useCallback((runId: string, text: string) => {
+    const flush = streamFlushRef.current;
+    flush.runId = runId;
+    flush.text = text;
+
+    if (flush.rafId !== null || flush.timeoutId) return;
+
+    if (document.hidden) {
+      flush.timeoutId = setTimeout(() => {
+        flush.timeoutId = null;
+        flushStreamingUpdate();
+      }, 32);
+      return;
+    }
+
+    flush.rafId = requestAnimationFrame(() => {
+      flush.rafId = null;
+      flushStreamingUpdate();
+    });
+
+    // Hidden-tab / throttled-rAF fallback.
+    flush.timeoutId = setTimeout(() => {
+      if (flush.rafId !== null) {
+        cancelAnimationFrame(flush.rafId);
+        flush.rafId = null;
+      }
+      flush.timeoutId = null;
+      flushStreamingUpdate();
+    }, 120);
+  }, [flushStreamingUpdate]);
+
+  const clearRecoveryTimer = useCallback(() => {
+    if (recoveryRef.current.timer) {
+      clearTimeout(recoveryRef.current.timer);
+      recoveryRef.current.timer = null;
+    }
+  }, []);
+
+  const triggerRecovery = useCallback((reason: RecoveryReason) => {
+    if (recoveryRef.current.inFlight) return;
+
+    clearRecoveryTimer();
+    recoveryRef.current.reason = reason;
+    setStream(prev => ({ ...prev, isRecovering: true, recoveryReason: reason }));
+
+    recoveryRef.current.timer = setTimeout(async () => {
+      recoveryRef.current.timer = null;
+      if (recoveryRef.current.inFlight) return;
+
+      recoveryRef.current.inFlight = true;
+      try {
+        const recovered = await loadChatHistory({
+          rpc,
+          sessionKey: currentSessionRef.current,
+          limit: RECOVERY_LIMITS[reason],
+        });
+
+        const merged = mergeRecoveredTail(allMessagesRef.current, recovered);
+        applyMessageWindow(merged, false);
+      } catch (err) {
+        console.debug('[ChatContext] Recovery failed:', err);
+      } finally {
+        recoveryRef.current.inFlight = false;
+        recoveryRef.current.reason = null;
+        setStream(prev => ({ ...prev, isRecovering: false, recoveryReason: null }));
+      }
+    }, 180);
+  }, [applyMessageWindow, clearRecoveryTimer, rpc]);
+
+  // Cleanup stream flush/recovery timers on unmount
   useEffect(() => {
     return () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
+      clearScheduledStreamFlush();
+      clearRecoveryTimer();
     };
-  }, []);
+  }, [clearScheduledStreamFlush, clearRecoveryTimer]);
 
   // ─── Load history (delegates to pure function) ───────────────────────────────
   const loadHistory = useCallback(async (session?: string) => {
     const sk = session || currentSessionRef.current;
     try {
       const result = await loadChatHistory({ rpc, sessionKey: sk, limit: 500 });
-      allMessagesRef.current = result;
-      // Show all if under threshold, otherwise show last N
-      if (result.length <= 50) {
-        setVisibleCount(result.length);
-        setHasMore(false);
-        setMessages(result);
-      } else {
-        setVisibleCount(50);
-        setHasMore(true);
-        setMessages(result.slice(-50));
-      }
+      applyMessageWindow(result, true);
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       allMessagesRef.current = [];
@@ -194,74 +381,91 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         role: 'system', html: 'Failed to load history: ' + errMsg, rawText: '', timestamp: new Date(),
       }]);
     }
-  }, [rpc]);
+  }, [applyMessageWindow, rpc]);
 
   // ─── Load more (older) messages for infinite scroll ──────────────────────────
   const loadMore = useCallback(() => {
     const all = allMessagesRef.current;
-    if (all.length <= visibleCount) { setHasMore(false); return false; }
-    const newCount = Math.min(all.length, visibleCount + LOAD_MORE_BATCH);
+    const currentVisible = visibleCountRef.current;
+    if (all.length <= currentVisible) {
+      setHasMore(false);
+      return false;
+    }
+
+    const newCount = Math.min(all.length, currentVisible + LOAD_MORE_BATCH);
     setVisibleCount(newCount);
+    visibleCountRef.current = newCount;
     setMessages(all.slice(-newCount));
     const stillMore = newCount < all.length;
     setHasMore(stillMore);
     return stillMore;
-  }, [visibleCount]);
+  }, []);
 
   // ─── Reset transient state on session switch ─────────────────────────────────
   useEffect(() => {
-    /* eslint-disable react-hooks/set-state-in-effect -- valid: reset transient state on session change */
-    setStreamingHtml('');
+    setStream({ html: '', isRecovering: false, recoveryReason: null });
     setIsGenerating(false);
     setProcessingStage(null);
     setActivityLog([]);
     setLastEventTimestamp(0);
-    setVisibleCount(50);
+    setVisibleCount(DEFAULT_VISIBLE_COUNT);
+    visibleCountRef.current = DEFAULT_VISIBLE_COUNT;
     setHasMore(false);
     allMessagesRef.current = [];
-    streamBufferRef.current = '';
+    runsRef.current.clear();
+    activeRunIdRef.current = null;
+    lastGatewaySeqRef.current = null;
+    lastChatSeqRef.current = null;
     thinkingStartRef.current = null;
     thinkingDurationRef.current = null;
     thinkingRunIdRef.current = null;
-    if (rafIdRef.current !== null) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [currentSession]);
+    clearScheduledStreamFlush();
+    clearRecoveryTimer();
+    recoveryRef.current.inFlight = false;
+    recoveryRef.current.reason = null;
+  }, [clearRecoveryTimer, clearScheduledStreamFlush, currentSession]);
 
-  // Load history on connect and session change
+  // Load history on initial connect/session switch; recover tail on reconnect.
+  const previousConnectionStateRef = useRef(connectionState);
   useEffect(() => {
+    const prevConnection = previousConnectionStateRef.current;
+
     if (connectionState === 'connected') {
-      loadHistory(currentSession); // eslint-disable-line react-hooks/set-state-in-effect -- valid: data fetching on state change
+      if (prevConnection === 'reconnecting') {
+        triggerRecovery('reconnect');
+      } else {
+        loadHistory(currentSession);
+      }
     }
-  }, [connectionState, currentSession, loadHistory]);
 
-  // ─── Poll history during active turns for real-time thinking/tool bubbles ────
+    previousConnectionStateRef.current = connectionState;
+  }, [connectionState, currentSession, loadHistory, triggerRecovery]);
+
+  // One-shot watchdog while generating: if stream stalls, recover once.
   useEffect(() => {
-    if (!isGenerating) return;
-    const inflight = { current: false };
-    const timer = setInterval(() => {
-      if (inflight.current) return;
-      inflight.current = true;
-      const ac = new AbortController();
-      pollAbortRef.current = ac;
-      loadHistory().finally(() => {
-        inflight.current = false;
-        if (pollAbortRef.current === ac) pollAbortRef.current = null;
-      });
-    }, 2500);
-    return () => {
-      clearInterval(timer);
-      // Abort any in-flight poll so it doesn't overwrite chat_final data
-      pollAbortRef.current?.abort();
-      pollAbortRef.current = null;
-    };
-  }, [isGenerating, loadHistory]);
+    if (!isGenerating || !lastEventTimestamp) return;
+
+    const timer = setTimeout(() => {
+      const elapsed = Date.now() - lastEventTimestamp;
+      if (elapsed >= 12_000 && !recoveryRef.current.inFlight && !recoveryRef.current.timer) {
+        triggerRecovery('chat-gap');
+      }
+    }, 12_000);
+
+    return () => clearTimeout(timer);
+  }, [isGenerating, lastEventTimestamp, triggerRecovery]);
 
   // ─── Subscribe to streaming events ───────────────────────────────────────────
   useEffect(() => {
     return subscribe((msg: GatewayEvent) => {
+      // Track gateway frame sequence regardless of event type.
+      if (typeof msg.seq === 'number') {
+        if (hasSeqGap(lastGatewaySeqRef.current, msg.seq) && (isGeneratingRef.current || Boolean(activeRunIdRef.current))) {
+          triggerRecovery('frame-gap');
+        }
+        lastGatewaySeqRef.current = updateHighestSeq(lastGatewaySeqRef.current, msg.seq);
+      }
+
       const classified = classifyStreamEvent(msg);
       if (!classified) return;
 
@@ -287,7 +491,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           setActivityLog([]);
           setLastEventTimestamp(0);
           if (soundEnabledRef.current) playPing();
-          loadHistory().catch(() => {});
           return;
         }
 
@@ -331,22 +534,49 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       // ── Chat events ───────────────────────────────────────────────────────
       const cp = classified.chatPayload!;
+      const activeRunBefore = activeRunIdRef.current;
+      const runId = resolveRunId(classified.runId, activeRunBefore, currentSessionRef.current);
+      const run = getOrCreateRunState(runsRef.current, runId, currentSessionRef.current);
+      run.lastFrameSeq = updateHighestSeq(run.lastFrameSeq, classified.frameSeq);
+
+      if (hasSeqGap(lastChatSeqRef.current, classified.chatSeq)) {
+        triggerRecovery('chat-gap');
+      }
+      lastChatSeqRef.current = updateHighestSeq(lastChatSeqRef.current, classified.chatSeq);
+
+      if (hasSeqGap(run.lastChatSeq, classified.chatSeq)) {
+        triggerRecovery('chat-gap');
+      }
+      const prevRunSeq = run.lastChatSeq;
+      run.lastChatSeq = updateHighestSeq(run.lastChatSeq, classified.chatSeq);
 
       setLastEventTimestamp(Date.now());
 
       if (type === 'chat_started') {
+        activeRunIdRef.current = runId;
+        run.startedAt = Date.now();
+        run.finalized = false;
+        run.status = 'started';
+        run.stopReason = undefined;
+        run.bufferText = '';
+
         playedSoundsRef.current.clear();
         setProcessingStage('thinking');
         setActivityLog([]);
         thinkingStartRef.current = Date.now();
         thinkingDurationRef.current = null;
-        thinkingRunIdRef.current = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+        thinkingRunIdRef.current = runId;
         return;
       }
 
       if (type === 'chat_delta') {
+        // Ignore stale/out-of-order deltas for an already finalized run.
+        if (run.finalized) return;
+        if (typeof classified.chatSeq === 'number' && prevRunSeq !== null && classified.chatSeq <= prevRunSeq) return;
+
         // Mid-stream join detection
         if (!isGeneratingRef.current) setIsGenerating(true);
+        if (!activeRunIdRef.current) activeRunIdRef.current = runId;
 
         // Capture thinking duration on first delta
         if (thinkingStartRef.current) {
@@ -356,89 +586,148 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         const delta = extractStreamDelta(cp);
         if (delta) {
-          scheduleStreamingUpdate(delta.cleaned);
+          if (delta.cleaned.startsWith(run.bufferText)) {
+            run.bufferText = delta.cleaned;
+          } else {
+            run.bufferText += delta.cleaned;
+          }
+          scheduleStreamingUpdate(runId, run.bufferText);
           setProcessingStage('streaming');
         }
         return;
       }
 
       if (type === 'chat_final') {
-        const finalData = extractFinalMessage(cp);
+        const isActiveRun = !activeRunBefore || activeRunBefore === runId;
 
-        setIsGenerating(false);
-        setStreamingHtml('');
-        setProcessingStage(null);
-        setActivityLog([]);
-        setLastEventTimestamp(0);
+        run.finalized = true;
+        run.status = 'ok';
+        run.stopReason = cp.stopReason;
+        run.bufferText = '';
+
+        if (activeRunIdRef.current === runId) {
+          activeRunIdRef.current = null;
+        }
+
+        if (isActiveRun) {
+          setIsGenerating(false);
+          setProcessingStage(null);
+          setActivityLog([]);
+          setLastEventTimestamp(0);
+          clearScheduledStreamFlush();
+          setStream(prev => ({ ...prev, html: '', runId: undefined }));
+        }
+
+        const finalData = extractFinalMessage(cp);
+        const finalMessages = processChatMessages(extractFinalMessages(cp));
+
+        if (finalMessages.length > 0) {
+          const merged = mergeFinalMessages(allMessagesRef.current, finalMessages);
+          const expectedRunId = thinkingRunIdRef.current;
+          const withDuration =
+            expectedRunId === runId && thinkingDurationRef.current && thinkingDurationRef.current > 0
+              ? patchThinkingDuration(merged, thinkingDurationRef.current)
+              : merged;
+
+          applyMessageWindow(withDuration, false);
+        } else {
+          triggerRecovery('unrenderable-final');
+        }
 
         // Handle TTS from the final message
-        if (finalData) {
-          if (finalData.ttsText && !playedSoundsRef.current.has(finalData.ttsText)) {
+        if (isActiveRun) {
+          if (finalData?.ttsText && !playedSoundsRef.current.has(finalData.ttsText)) {
             playedSoundsRef.current.add(finalData.ttsText);
             speakRef.current(finalData.ttsText);
-          } else if (!finalData.ttsText && lastMessageWasVoiceRef.current && finalData.text) {
+          } else if (!finalData?.ttsText && lastMessageWasVoiceRef.current && finalData?.text) {
             // Voice fallback: agent forgot [tts:...] marker — auto-speak cleaned response
             const fallback = buildVoiceFallbackText(finalData.text);
             if (fallback) speakRef.current(fallback);
-          } else if (!finalData.ttsText && soundEnabledRef.current) {
+          } else if (soundEnabledRef.current) {
             playPing();
           }
-        } else {
+        }
+
+        thinkingDurationRef.current = null;
+        thinkingStartRef.current = null;
+        thinkingRunIdRef.current = null;
+        pruneRunRegistry(runsRef.current, activeRunIdRef.current);
+        return;
+      }
+
+      if (type === 'chat_aborted') {
+        const isActiveRun = !activeRunBefore || activeRunBefore === runId;
+
+        run.finalized = true;
+        run.status = undefined;
+        run.stopReason = cp.stopReason || 'aborted';
+        run.bufferText = '';
+
+        if (activeRunIdRef.current === runId) {
+          activeRunIdRef.current = null;
+        }
+
+        // Keep partial text if gateway includes it in aborted payload.
+        const partialMessagesRaw = extractFinalMessages(cp);
+        if (partialMessagesRaw.length > 0) {
+          const partialMessages = processChatMessages(partialMessagesRaw);
+          if (partialMessages.length > 0) {
+            const merged = mergeFinalMessages(allMessagesRef.current, partialMessages);
+            applyMessageWindow(merged, false);
+          }
+        }
+
+        if (isActiveRun) {
+          setIsGenerating(false);
+          setProcessingStage(null);
+          setActivityLog([]);
+          setLastEventTimestamp(0);
+          clearScheduledStreamFlush();
+          setStream(prev => ({ ...prev, html: '', runId: undefined }));
           if (soundEnabledRef.current) playPing();
         }
 
-        // Abort any in-flight poll to prevent stale data overwriting our final reload
-        pollAbortRef.current?.abort();
-        pollAbortRef.current = null;
-
-        // Reload full history to sync canonical transcript
-        const savedDuration = thinkingDurationRef.current;
-        const expectedRunId = thinkingRunIdRef.current;
-        loadHistory().then(() => {
-          // Guard against async race: skip if a new run started
-          if (thinkingRunIdRef.current !== expectedRunId) return;
-
-          // Patch the last thinking bubble from this turn with duration
-          if (savedDuration && savedDuration > 0) {
-            setMessages(prev => {
-              // Scope search to current turn (after last user message)
-              const lastUserIdx = prev.reduce((acc, m, i) => m.role === 'user' ? i : acc, -1);
-              const searchSlice = lastUserIdx >= 0 ? prev.slice(lastUserIdx) : prev;
-              const reverseIdx = [...searchSlice].reverse().findIndex(m => m.role === 'assistant' && m.isThinking);
-              if (reverseIdx >= 0) {
-                const realIdx = (lastUserIdx >= 0 ? lastUserIdx : 0) + searchSlice.length - 1 - reverseIdx;
-                const updated = [...prev];
-                updated[realIdx] = { ...updated[realIdx], thinkingDurationMs: savedDuration };
-                return updated;
-              }
-              return prev;
-            });
-          }
-          thinkingDurationRef.current = null;
-          thinkingStartRef.current = null;
-          thinkingRunIdRef.current = null;
-        }).catch(() => {
-          if (finalData) {
-            const newMessages = splitToolCallMessage(finalData.message);
-            setMessages(prev => [...prev, ...newMessages]);
-          }
-        });
+        thinkingDurationRef.current = null;
+        thinkingStartRef.current = null;
+        thinkingRunIdRef.current = null;
+        pruneRunRegistry(runsRef.current, activeRunIdRef.current);
         return;
       }
 
       if (type === 'chat_error') {
-        setIsGenerating(false);
-        setStreamingHtml('');
-        setProcessingStage(null);
-        setActivityLog([]);
-        setLastEventTimestamp(0);
+        const isActiveRun = !activeRunBefore || activeRunBefore === runId;
+
+        run.finalized = true;
+        run.status = undefined;
+        run.stopReason = cp.stopReason || cp.errorMessage || cp.error || 'error';
+        run.bufferText = '';
+
+        if (activeRunIdRef.current === runId) {
+          activeRunIdRef.current = null;
+        }
+
+        if (isActiveRun) {
+          setIsGenerating(false);
+          setProcessingStage(null);
+          setActivityLog([]);
+          setLastEventTimestamp(0);
+          clearScheduledStreamFlush();
+          setStream(prev => ({ ...prev, html: '', runId: undefined }));
+        }
+
         thinkingStartRef.current = null;
         thinkingDurationRef.current = null;
         thinkingRunIdRef.current = null;
-        return;
+        pruneRunRegistry(runsRef.current, activeRunIdRef.current);
       }
     });
-  }, [subscribe, scheduleStreamingUpdate, loadHistory]);
+  }, [
+    applyMessageWindow,
+    clearScheduledStreamFlush,
+    scheduleStreamingUpdate,
+    subscribe,
+    triggerRecovery,
+  ]);
 
   // ─── Send message (delegates to pure functions) ──────────────────────────────
   const handleSend = useCallback(async (text: string, images?: ImageAttachment[]) => {
@@ -451,31 +740,53 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     allMessagesRef.current = [...allMessagesRef.current, userMsg];
     setMessages(prev => [...prev, userMsg]);
     setIsGenerating(true);
-    setStreamingHtml('');
+    setStream(prev => ({ ...prev, html: '', runId: undefined }));
     setProcessingStage('thinking');
 
     const idempotencyKey = crypto.randomUUID ? crypto.randomUUID() : 'ik-' + Date.now();
     try {
-      await sendChatMessage({
+      const ack = await sendChatMessage({
         rpc,
         sessionKey: currentSessionRef.current,
         text,
         images,
         idempotencyKey,
       });
+
+      if (ack.runId) {
+        const run = getOrCreateRunState(runsRef.current, ack.runId, currentSessionRef.current);
+        run.status = ack.status;
+        run.finalized = false;
+        activeRunIdRef.current = ack.runId;
+        thinkingRunIdRef.current = ack.runId;
+      }
+
       // Confirm the message — remove pending state
+      allMessagesRef.current = allMessagesRef.current.map(m =>
+        m.tempId === tempId ? { ...m, pending: false } : m,
+      );
       setMessages(prev => prev.map(m =>
         m.tempId === tempId ? { ...m, pending: false } : m,
       ));
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
+
       // Mark message as failed
+      allMessagesRef.current = allMessagesRef.current.map(m =>
+        m.tempId === tempId ? { ...m, pending: false, failed: true } : m,
+      );
       setMessages(prev => prev.map(m =>
         m.tempId === tempId ? { ...m, pending: false, failed: true } : m,
       ));
-      setMessages(prev => [...prev, {
-        role: 'system', html: 'Send error: ' + errMsg, rawText: '', timestamp: new Date(),
-      }]);
+
+      const errMsgBubble: ChatMsg = {
+        role: 'system',
+        html: 'Send error: ' + errMsg,
+        rawText: '',
+        timestamp: new Date(),
+      };
+      allMessagesRef.current = [...allMessagesRef.current, errMsgBubble];
+      setMessages(prev => [...prev, errMsgBubble]);
       setIsGenerating(false);
     }
   }, [rpc]);
@@ -497,16 +808,26 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setShowResetConfirm(false);
     try {
       await rpc('sessions.reset', { key: currentSessionRef.current });
-      setMessages([{
-        role: 'system', html: '⚙️ Session reset. Starting fresh.', rawText: '', timestamp: new Date(),
-      }]);
+      const msg: ChatMsg = {
+        role: 'system',
+        html: '⚙️ Session reset. Starting fresh.',
+        rawText: '',
+        timestamp: new Date(),
+      };
+      allMessagesRef.current = [msg];
+      applyMessageWindow([msg], true);
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
-      setMessages(prev => [...prev, {
-        role: 'system', html: `⚙️ Reset failed: ${errMsg}`, rawText: '', timestamp: new Date(),
-      }]);
+      const msg: ChatMsg = {
+        role: 'system',
+        html: `⚙️ Reset failed: ${errMsg}`,
+        rawText: '',
+        timestamp: new Date(),
+      };
+      allMessagesRef.current = [...allMessagesRef.current, msg];
+      setMessages(prev => [...prev, msg]);
     }
-  }, [rpc]);
+  }, [applyMessageWindow, rpc]);
 
   const cancelReset = useCallback(() => {
     setShowResetConfirm(false);
@@ -516,7 +837,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const value = useMemo<ChatContextValue>(() => ({
     messages,
     isGenerating,
-    streamingHtml,
+    stream,
     processingStage,
     lastEventTimestamp,
     activityLog,
@@ -531,11 +852,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     confirmReset,
     cancelReset,
   }), [
-    messages, isGenerating, streamingHtml, processingStage,
-    lastEventTimestamp, activityLog, currentToolDescription,
-    handleSend, handleAbort, handleReset, loadHistory,
-    loadMore, hasMore,
-    showResetConfirm, confirmReset, cancelReset,
+    messages,
+    isGenerating,
+    stream,
+    processingStage,
+    lastEventTimestamp,
+    activityLog,
+    currentToolDescription,
+    handleSend,
+    handleAbort,
+    handleReset,
+    loadHistory,
+    loadMore,
+    hasMore,
+    showResetConfirm,
+    confirmReset,
+    cancelReset,
   ]);
 
   return (
