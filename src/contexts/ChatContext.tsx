@@ -547,19 +547,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         triggerRecovery(reason);
       };
 
-      // Track gateway frame sequence regardless of event type.
+      const classified = classifyStreamEvent(msg);
+      if (!classified) return;
+
+      // Ignore events for other sessions
+      if (classified.sessionKey !== currentSessionRef.current) return;
+
+      // Track gateway frame sequence — only for current session to avoid
+      // false-positive gap recovery from unrelated event traffic.
       if (typeof msg.seq === 'number') {
         if (hasSeqGap(lastGatewaySeqRef.current, msg.seq) && (isGeneratingRef.current || Boolean(activeRunIdRef.current))) {
           triggerRecoveryOnce('frame-gap');
         }
         lastGatewaySeqRef.current = updateHighestSeq(lastGatewaySeqRef.current, msg.seq);
       }
-
-      const classified = classifyStreamEvent(msg);
-      if (!classified) return;
-
-      // Ignore events for other sessions
-      if (classified.sessionKey !== currentSessionRef.current) return;
 
       const { type } = classified;
 
@@ -670,6 +671,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         run.bufferRaw = '';
         run.bufferText = '';
 
+        setIsGenerating(true);
         playedSoundsRef.current.clear();
         setProcessingStage('thinking');
         setActivityLog([]);
