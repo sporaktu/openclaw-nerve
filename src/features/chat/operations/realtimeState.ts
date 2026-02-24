@@ -8,6 +8,9 @@ export interface RunState {
   startedAt: number;
   lastChatSeq: number | null;
   lastFrameSeq: number | null;
+  /** Raw (uncleaned) delta text — used for cumulative detection */
+  bufferRaw: string;
+  /** Cleaned delta text (TTS/chart markers stripped) — used for display */
   bufferText: string;
   finalized: boolean;
   status?: ChatSendStatus;
@@ -47,6 +50,7 @@ export function getOrCreateRunState(
     startedAt: Date.now(),
     lastChatSeq: null,
     lastFrameSeq: null,
+    bufferRaw: '',
     bufferText: '',
     finalized: false,
   };

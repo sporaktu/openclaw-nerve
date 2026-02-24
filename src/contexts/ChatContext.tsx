@@ -340,6 +340,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const triggerRecovery = useCallback((reason: RecoveryReason) => {
     if (recoveryRef.current.inFlight) return;
 
+    // Don't run recovery while we're actively streaming deltas — the streaming
+    // bubble handles display and chat_final will bring the authoritative state.
+    // Recovery mid-stream causes thinking blocks from the gateway transcript to
+    // appear as separate bubbles alongside the live streaming bubble.
+    // Exception: 'reconnect' and 'unrenderable-final' are post-generation recovery
+    // and should always proceed.
+    const activeRun = activeRunIdRef.current;
+    const hasActiveDelta = activeRun
+      ? (runsRef.current.get(activeRun)?.bufferText.length ?? 0) > 0
+      : false;
+    if (hasActiveDelta && reason !== 'reconnect' && reason !== 'unrenderable-final') {
+      return;
+    }
+
     clearRecoveryTimer();
     recoveryRef.current.reason = reason;
     setStream(prev => ({ ...prev, isRecovering: true, recoveryReason: reason }));
@@ -621,6 +635,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         run.finalized = false;
         run.status = 'started';
         run.stopReason = undefined;
+        run.bufferRaw = '';
         run.bufferText = '';
 
         playedSoundsRef.current.clear();
@@ -649,22 +664,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         const delta = extractStreamDelta(cp);
         if (delta) {
-          // Detect cumulative vs incremental deltas.
-          // Cumulative: new delta contains existing buffer as prefix (replace).
-          // Incremental: new delta is a small chunk to append.
-          // Heuristic: if delta is longer than or equal to current buffer AND
-          // starts with existing text, it's cumulative. For very short buffers
-          // (<8 chars), also treat as cumulative if delta length >= buffer length
-          // to avoid doubling on the first few deltas.
-          const isCumulative =
-            run.bufferText.length === 0 ||
-            (delta.cleaned.length >= run.bufferText.length && delta.cleaned.startsWith(run.bufferText)) ||
-            (run.bufferText.length < 8 && delta.cleaned.length >= run.bufferText.length);
-          if (isCumulative) {
-            run.bufferText = delta.cleaned;
-          } else {
-            run.bufferText += delta.cleaned;
-          }
+          // Gateway deltas are always cumulative — each delta contains the
+          // full accumulated text so far (gateway buffers internally and
+          // throttles to 1 delta per 150ms). Always replace, never append.
+          run.bufferRaw = delta.text;
+          run.bufferText = delta.cleaned;
           scheduleStreamingUpdate(runId, run.bufferText);
           setProcessingStage('streaming');
         }
@@ -682,6 +686,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         run.finalized = true;
         run.status = 'ok';
         run.stopReason = cp.stopReason;
+        run.bufferRaw = '';
         run.bufferText = '';
 
         if (activeRunIdRef.current === runId) {
@@ -745,6 +750,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         run.finalized = true;
         run.status = undefined;
         run.stopReason = cp.stopReason || 'aborted';
+        run.bufferRaw = '';
         run.bufferText = '';
 
         if (activeRunIdRef.current === runId) {
@@ -786,6 +792,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         run.finalized = true;
         run.status = undefined;
         run.stopReason = cp.stopReason || cp.errorMessage || cp.error || 'error';
+        run.bufferRaw = '';
         run.bufferText = '';
 
         if (activeRunIdRef.current === runId) {
