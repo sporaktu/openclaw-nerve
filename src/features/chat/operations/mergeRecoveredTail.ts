@@ -40,13 +40,19 @@ function findSuffixPrefixOverlap(existingSigs: string[], recoveredSigs: string[]
   return 0;
 }
 
+/**
+ * Find a single-message anchor between existing tail and recovered messages.
+ * Searches from the END of the existing array to find the latest match,
+ * reducing the risk of hash collisions on short/common messages anchoring
+ * at the wrong position.
+ */
 function findTailAnchor(existingSigs: string[], recoveredSigs: string[]) {
   const tailStart = Math.max(0, existingSigs.length - 160);
 
-  for (let recoveredIdx = 0; recoveredIdx < recoveredSigs.length; recoveredIdx++) {
-    const sig = recoveredSigs[recoveredIdx];
-    for (let existingIdx = existingSigs.length - 1; existingIdx >= tailStart; existingIdx--) {
-      if (existingSigs[existingIdx] === sig) {
+  for (let existingIdx = existingSigs.length - 1; existingIdx >= tailStart; existingIdx--) {
+    const sig = existingSigs[existingIdx];
+    for (let recoveredIdx = 0; recoveredIdx < recoveredSigs.length; recoveredIdx++) {
+      if (recoveredSigs[recoveredIdx] === sig) {
         return { existingIdx, recoveredIdx };
       }
     }

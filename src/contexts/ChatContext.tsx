@@ -82,6 +82,10 @@ function normalizeComparableText(text: string): string {
 }
 
 function isLikelyDuplicateMessage(a: ChatMsg, b: ChatMsg): boolean {
+  // Require timestamps within 60s to avoid suppressing legitimately repeated messages.
+  const timeDiffMs = Math.abs(a.timestamp.getTime() - b.timestamp.getTime());
+  if (timeDiffMs > 60_000) return false;
+
   return (
     a.role === b.role &&
     normalizeComparableText(a.rawText) === normalizeComparableText(b.rawText) &&
@@ -218,8 +222,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const streamFlushRef = useRef<StreamFlushState>({ runId: null, text: '', rafId: null, timeoutId: null });
   const recoveryRef = useRef<RecoveryState>({ timer: null, inFlight: false, reason: null });
+  // Generation counter: incremented on session switch and chat_final apply.
+  // Recovery callbacks compare their captured generation to discard stale results.
+  const recoveryGenerationRef = useRef(0);
 
   const playedSoundsRef = useRef<Set<string>>(new Set());
+  // Track whether we were generating at disconnect, for conditional reconnect recovery.
+  const wasGeneratingOnDisconnectRef = useRef(false);
 
   // Voice message tracking for TTS fallback
   const lastMessageWasVoiceRef = useRef(false);
@@ -335,9 +344,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     recoveryRef.current.reason = reason;
     setStream(prev => ({ ...prev, isRecovering: true, recoveryReason: reason }));
 
+    const capturedGeneration = recoveryGenerationRef.current;
+
     recoveryRef.current.timer = setTimeout(async () => {
       recoveryRef.current.timer = null;
       if (recoveryRef.current.inFlight) return;
+
+      // Discard stale recovery if generation changed (session switch or chat_final applied).
+      if (capturedGeneration !== recoveryGenerationRef.current) {
+        setStream(prev => ({ ...prev, isRecovering: false, recoveryReason: null }));
+        return;
+      }
 
       recoveryRef.current.inFlight = true;
       try {
@@ -346,6 +363,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           sessionKey: currentSessionRef.current,
           limit: RECOVERY_LIMITS[reason],
         });
+
+        // Check generation again after async fetch — another session switch or
+        // chat_final may have occurred while we were loading.
+        if (capturedGeneration !== recoveryGenerationRef.current) return;
 
         const merged = mergeRecoveredTail(allMessagesRef.current, recovered);
         applyMessageWindow(merged, false);
@@ -423,6 +444,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     clearRecoveryTimer();
     recoveryRef.current.inFlight = false;
     recoveryRef.current.reason = null;
+    // Invalidate any in-flight recovery so stale results are discarded.
+    recoveryGenerationRef.current += 1;
+    wasGeneratingOnDisconnectRef.current = false;
   }, [clearRecoveryTimer, clearScheduledStreamFlush, currentSession]);
 
   // Load history on initial connect/session switch; recover tail on reconnect.
@@ -431,11 +455,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const prevConnection = previousConnectionStateRef.current;
 
     if (connectionState === 'connected') {
-      if (prevConnection === 'reconnecting') {
+      if (prevConnection === 'reconnecting' && wasGeneratingOnDisconnectRef.current) {
+        // Only trigger tail-merge recovery if we were generating at disconnect time.
         triggerRecovery('reconnect');
       } else {
+        // Full history load for initial connect, session switch, or idle reconnect.
         loadHistory(currentSession);
       }
+      wasGeneratingOnDisconnectRef.current = false;
+    }
+
+    // Capture generating/active-run state when entering reconnecting.
+    if (connectionState === 'reconnecting' && prevConnection === 'connected') {
+      wasGeneratingOnDisconnectRef.current =
+        isGeneratingRef.current || Boolean(activeRunIdRef.current);
     }
 
     previousConnectionStateRef.current = connectionState;
@@ -458,10 +491,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // ─── Subscribe to streaming events ───────────────────────────────────────────
   useEffect(() => {
     return subscribe((msg: GatewayEvent) => {
+      // ── Per-event recovery deduplication ───────────────────────────────────
+      // A single event can trip multiple gap checks (frame-gap + chat-gap + per-run gap).
+      // Trigger recovery at most once per event to avoid resetting the debounce timer.
+      let recoveryTriggeredThisEvent = false;
+      const triggerRecoveryOnce = (reason: RecoveryReason) => {
+        if (recoveryTriggeredThisEvent) return;
+        recoveryTriggeredThisEvent = true;
+        triggerRecovery(reason);
+      };
+
       // Track gateway frame sequence regardless of event type.
       if (typeof msg.seq === 'number') {
         if (hasSeqGap(lastGatewaySeqRef.current, msg.seq) && (isGeneratingRef.current || Boolean(activeRunIdRef.current))) {
-          triggerRecovery('frame-gap');
+          triggerRecoveryOnce('frame-gap');
         }
         lastGatewaySeqRef.current = updateHighestSeq(lastGatewaySeqRef.current, msg.seq);
       }
@@ -491,6 +534,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           setActivityLog([]);
           setLastEventTimestamp(0);
           if (soundEnabledRef.current) playPing();
+
+          // CLI agents (Codex, Claude Code CLI) only emit lifecycle_end, not chat_final.
+          // If the active run wasn't finalized via chat_final, trigger recovery to load
+          // the final transcript.
+          const activeRun = activeRunIdRef.current;
+          const runFinalized = activeRun ? runsRef.current.get(activeRun)?.finalized : false;
+          if (!runFinalized) {
+            triggerRecovery('reconnect');
+          }
           return;
         }
 
@@ -536,16 +588,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const cp = classified.chatPayload!;
       const activeRunBefore = activeRunIdRef.current;
       const runId = resolveRunId(classified.runId, activeRunBefore, currentSessionRef.current);
+
+      // If no runId and no active run, ignore orphan event to prevent phantom run entries.
+      if (!runId) return;
+
       const run = getOrCreateRunState(runsRef.current, runId, currentSessionRef.current);
       run.lastFrameSeq = updateHighestSeq(run.lastFrameSeq, classified.frameSeq);
 
       if (hasSeqGap(lastChatSeqRef.current, classified.chatSeq)) {
-        triggerRecovery('chat-gap');
+        triggerRecoveryOnce('chat-gap');
       }
       lastChatSeqRef.current = updateHighestSeq(lastChatSeqRef.current, classified.chatSeq);
 
       if (hasSeqGap(run.lastChatSeq, classified.chatSeq)) {
-        triggerRecovery('chat-gap');
+        triggerRecoveryOnce('chat-gap');
       }
       const prevRunSeq = run.lastChatSeq;
       run.lastChatSeq = updateHighestSeq(run.lastChatSeq, classified.chatSeq);
@@ -586,7 +642,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         const delta = extractStreamDelta(cp);
         if (delta) {
-          if (delta.cleaned.startsWith(run.bufferText)) {
+          // Detect cumulative vs incremental deltas.  Require the buffer to have
+          // meaningful length (≥8 chars) before applying the startsWith heuristic
+          // to avoid false positives on short common prefixes.
+          if (run.bufferText.length >= 8 && delta.cleaned.startsWith(run.bufferText)) {
             run.bufferText = delta.cleaned;
           } else {
             run.bufferText += delta.cleaned;
@@ -598,7 +657,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       if (type === 'chat_final') {
-        const isActiveRun = !activeRunBefore || activeRunBefore === runId;
+        // Guard: when activeRunBefore is null, only treat as active run if we were
+        // in a generating state. This prevents background/stale finals from clearing
+        // the UI state for the user's actual active run.
+        const isActiveRun = activeRunBefore !== null
+          ? activeRunBefore === runId
+          : isGeneratingRef.current;
 
         run.finalized = true;
         run.status = 'ok';
@@ -608,6 +672,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (activeRunIdRef.current === runId) {
           activeRunIdRef.current = null;
         }
+
+        // Invalidate any in-flight recovery so stale results don't overwrite this final.
+        recoveryGenerationRef.current += 1;
 
         if (isActiveRun) {
           setIsGenerating(false);
@@ -656,7 +723,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       if (type === 'chat_aborted') {
-        const isActiveRun = !activeRunBefore || activeRunBefore === runId;
+        const isActiveRun = activeRunBefore !== null
+          ? activeRunBefore === runId
+          : isGeneratingRef.current;
 
         run.finalized = true;
         run.status = undefined;
@@ -695,7 +764,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
 
       if (type === 'chat_error') {
-        const isActiveRun = !activeRunBefore || activeRunBefore === runId;
+        const isActiveRun = activeRunBefore !== null
+          ? activeRunBefore === runId
+          : isGeneratingRef.current;
 
         run.finalized = true;
         run.status = undefined;

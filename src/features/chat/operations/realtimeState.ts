@@ -54,22 +54,43 @@ export function getOrCreateRunState(
   return run;
 }
 
+/**
+ * Resolve the run ID for an incoming event.
+ * Returns null when no runId is provided AND no active run exists,
+ * preventing phantom run entries from accumulating.
+ */
 export function resolveRunId(
   runId: string | undefined,
   activeRunId: string | null,
-  sessionKey: string,
-): string {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for call-site compatibility
+  _sessionKey: string,
+): string | null {
   if (runId) return runId;
   if (activeRunId) return activeRunId;
-  return createFallbackRunId(sessionKey);
+  return null;
 }
 
+const STALE_RUN_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_RETAINED_FINALIZED_RUNS = 24;
+
 export function pruneRunRegistry(runs: Map<string, RunState>, activeRunId: string | null): void {
+  const now = Date.now();
+
+  // Prune orphan runs: non-finalized runs older than STALE_RUN_MS that aren't the active run.
+  // These are runs that started but never received a final/abort/error event.
+  for (const [id, run] of runs) {
+    if (id === activeRunId) continue;
+    if (!run.finalized && now - run.startedAt > STALE_RUN_MS) {
+      runs.delete(id);
+    }
+  }
+
+  // Prune excess finalized runs (keep at most MAX_RETAINED_FINALIZED_RUNS).
   const finalized = [...runs.values()]
     .filter(run => run.finalized && run.runId !== activeRunId)
     .sort((a, b) => b.startedAt - a.startedAt);
 
-  for (const run of finalized.slice(24)) {
+  for (const run of finalized.slice(MAX_RETAINED_FINALIZED_RUNS)) {
     runs.delete(run.runId);
   }
 }
