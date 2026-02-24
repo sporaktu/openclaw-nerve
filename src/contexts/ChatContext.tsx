@@ -14,7 +14,7 @@ import { createContext, useContext, useCallback, useRef, useEffect, useState, us
 import { useGateway } from './GatewayContext';
 import { useSessionContext } from './SessionContext';
 import { useSettings } from './SettingsContext';
-import type { GatewayEvent } from '@/types';
+import { getSessionKey, type GatewayEvent } from '@/types';
 import { renderMarkdown, renderToolResults } from '@/utils/helpers';
 import { playPing } from '@/features/voice/audio-feedback';
 import {
@@ -212,7 +212,7 @@ interface RecoveryState {
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { connectionState, rpc, subscribe } = useGateway();
-  const { currentSession } = useSessionContext();
+  const { currentSession, sessions } = useSessionContext();
   const { soundEnabled, speak } = useSettings();
 
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -233,6 +233,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const runsRef = useRef<Map<string, RunState>>(new Map());
   const activeRunIdRef = useRef<string | null>(null);
   const lastGatewaySeqRef = useRef<number | null>(null);
+  const toolResultRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastChatSeqRef = useRef<number | null>(null);
 
   const streamFlushRef = useRef<StreamFlushState>({ runId: null, text: '', rafId: null, timeoutId: null });
@@ -491,6 +492,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     thinkingRunIdRef.current = null;
     clearScheduledStreamFlush();
     clearRecoveryTimer();
+    if (toolResultRefreshRef.current) {
+      clearTimeout(toolResultRefreshRef.current);
+      toolResultRefreshRef.current = null;
+    }
     recoveryRef.current.inFlight = false;
     recoveryRef.current.reason = null;
     // Invalidate any in-flight recovery so stale results are discarded.
@@ -523,6 +528,34 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     previousConnectionStateRef.current = connectionState;
   }, [connectionState, currentSession, loadHistory, triggerRecovery]);
 
+  // Periodic history poll for sub-agent sessions.
+  // The gateway doesn't emit intermediate agent events (thinking, tool use) for
+  // sub-agents on the parent WS connection, and intermediate messages may not be
+  // committed to history until each tool call completes. Poll every 3s to pick up
+  // new content while the sub-agent is active. Stops when session state is idle/done.
+  const isSubagentSession = currentSession?.includes(':subagent:') ?? false;
+  const subagentSessionState = isSubagentSession
+    ? sessions.find(s => getSessionKey(s) === currentSession)?.state
+    : undefined;
+  const isSubagentActive = isSubagentSession && (
+    !subagentSessionState ||
+    subagentSessionState === 'thinking' ||
+    subagentSessionState === 'generating' ||
+    subagentSessionState === 'streaming' ||
+    subagentSessionState === 'tool_use' ||
+    subagentSessionState === 'started' ||
+    subagentSessionState === 'running'
+  );
+  useEffect(() => {
+    if (!isSubagentActive || connectionState !== 'connected') return;
+
+    const pollInterval = setInterval(() => {
+      loadHistory(currentSession);
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [isSubagentActive, connectionState, currentSession, loadHistory]);
+
   // One-shot watchdog while generating: if stream stalls, recover once.
   useEffect(() => {
     if (!isGenerating || !lastEventTimestamp) return;
@@ -552,6 +585,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       const classified = classifyStreamEvent(msg);
       if (!classified) return;
+
+      // DEBUG: log ALL classified events before session filter
 
       // Sub-agent completion: when a child session finishes, refresh parent history
       // since the gateway doesn't emit events on the parent session.
@@ -636,11 +671,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        // DEBUG: log all agent event types for this session
+
         if (type === 'agent_tool_result') {
           const completedId = ap.data?.toolCallId;
           if (completedId) {
             setActivityLog(prev => markToolCompleted(prev, completedId));
           }
+          // Merge new thinking/tool messages from completed steps without resetting.
+          // Debounced to coalesce rapid tool completions into one fetch.
+          if (toolResultRefreshRef.current) clearTimeout(toolResultRefreshRef.current);
+          toolResultRefreshRef.current = setTimeout(async () => {
+            toolResultRefreshRef.current = null;
+            try {
+              const recovered = await loadChatHistory({
+                rpc,
+                sessionKey: currentSessionRef.current,
+                limit: 100,
+              });
+              if (recovered.length > 0) {
+                const merged = mergeRecoveredTail(allMessagesRef.current, recovered);
+                applyMessageWindow(merged, false);
+              }
+            } catch { /* best-effort */ }
+          }, 300);
           return;
         }
 
