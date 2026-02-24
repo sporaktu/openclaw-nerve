@@ -3,6 +3,7 @@
  *
  * Extracted from ChatContext.handleSend. No React hooks, setState, or refs.
  */
+import { generateMsgId } from '@/features/chat/types';
 import type { ChatMsg, ImageAttachment } from '@/features/chat/types';
 import { renderMarkdown, renderToolResults } from '@/utils/helpers';
 
@@ -40,6 +41,7 @@ export function buildUserMessage(params: {
   const tempId = crypto.randomUUID ? crypto.randomUUID() : 'temp-' + Date.now();
 
   const msg: ChatMsg = {
+    msgId: generateMsgId(),
     role: 'user',
     html: renderToolResults(renderMarkdown(text)),
     rawText: text,

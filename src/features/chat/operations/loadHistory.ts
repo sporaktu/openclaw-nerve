@@ -4,6 +4,7 @@
  * Extracted from ChatContext to keep the context a thin state-management wrapper.
  * All functions here are pure (no React hooks, setState, or refs).
  */
+import { generateMsgId } from '@/features/chat/types';
 import type { ChatMsg, ChatMsgRole, ToolGroupEntry } from '@/features/chat/types';
 import type { ChatMessage, ContentBlock, ChatHistoryResponse } from '@/types';
 import { extractText, describeToolUse, renderMarkdown, renderToolResults } from '@/utils/helpers';
@@ -407,7 +408,13 @@ export function processChatMessages(messages: ChatMessage[]): ChatMsg[] {
     .flatMap(splitToolCallMessage);
 
   const grouped = groupToolMessages(chatMsgs);
-  return tagIntermediateMessages(grouped);
+  const tagged = tagIntermediateMessages(grouped);
+
+  // Assign stable IDs to any message missing one (for React keying).
+  for (const msg of tagged) {
+    if (!msg.msgId) msg.msgId = generateMsgId();
+  }
+  return tagged;
 }
 
 /**

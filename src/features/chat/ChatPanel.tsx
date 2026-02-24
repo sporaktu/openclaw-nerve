@@ -149,8 +149,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
       if (msgElement && scrollRef.current) {
         // Expand the message if it's collapsed
         const msgIndex = search.currentMatch.messageIndex;
-        if (collapsed[msgIndex]) {
-          setCollapsed(prev => ({ ...prev, [msgIndex]: false }));
+        const searchMsg = messages[msgIndex];
+        const searchCollapseKey = searchMsg?.msgId || searchMsg?.tempId || msgIndex;
+        if (collapsed[searchCollapseKey]) {
+          setCollapsed(prev => ({ ...prev, [searchCollapseKey]: false }));
         }
         // Scroll to the message
         msgElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -200,7 +202,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
   };
 
   const toggleCollapse = (idx: number) => {
-    setCollapsed(prev => ({ ...prev, [idx]: !prev[idx] }));
+    // Resolve to stable msgId so collapse state survives list reordering.
+    const msg = messages[idx];
+    const key = msg?.msgId || msg?.tempId || idx;
+    setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   const toggleMemory = (key: string) => {
@@ -248,11 +253,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
         )}
         {messages.map((msg, i) => {
           const isTool = msg.role === 'tool' || msg.role === 'toolResult';
-          const isCollapsed = collapsed[i] ?? (msg.isThinking || isMessageCollapsible(msg));
-          const memoryKey = `mem-${i}`;
+          const collapseKey = msg.msgId || msg.tempId || i;
+          const isCollapsed = collapsed[collapseKey] ?? (msg.isThinking || isMessageCollapsible(msg));
+          const memoryKey = `mem-${collapseKey}`;
           const isMemoryCollapsed = collapsed[memoryKey] ?? true;
           const isCurrentMatch = search.currentMatch?.messageIndex === i;
-          const stableKey = msg.tempId || `${msg.role}-${msg.timestamp.getTime()}-${i}`;
+          const stableKey = msg.msgId || msg.tempId || `${msg.role}-${msg.timestamp.getTime()}-${i}`;
 
           if (isTool) {
             // Grouped tool bubble (multiple consecutive tool calls)

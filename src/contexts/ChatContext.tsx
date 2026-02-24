@@ -38,6 +38,7 @@ import {
   resolveRunId,
   updateHighestSeq,
 } from '@/features/chat/operations';
+import { generateMsgId } from '@/features/chat/types';
 import type { ImageAttachment, ChatMsg } from '@/features/chat/types';
 import type { RecoveryReason, RunState } from '@/features/chat/operations';
 
@@ -121,6 +122,7 @@ function mergeFinalMessages(existing: ChatMsg[], incoming: ChatMsg[]): ChatMsg[]
       if (duplicateRecentUser) continue;
     }
 
+    if (!msg.msgId) msg.msgId = generateMsgId();
     merged.push(msg);
   }
 
@@ -428,7 +430,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       allMessagesRef.current = [];
       setHasMore(false);
       setMessages(prev => [...prev, {
-        role: 'system', html: 'Failed to load history: ' + errMsg, rawText: '', timestamp: new Date(),
+        msgId: generateMsgId(), role: 'system', html: 'Failed to load history: ' + errMsg, rawText: '', timestamp: new Date(),
       }]);
     }
   }, [applyMessageWindow, rpc]);
@@ -900,6 +902,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       ));
 
       const errMsgBubble: ChatMsg = {
+        msgId: generateMsgId(),
         role: 'system',
         html: 'Send error: ' + errMsg,
         rawText: '',
@@ -929,6 +932,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       await rpc('sessions.reset', { key: currentSessionRef.current });
       const msg: ChatMsg = {
+        msgId: generateMsgId(),
         role: 'system',
         html: '⚙️ Session reset. Starting fresh.',
         rawText: '',
@@ -939,6 +943,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       const msg: ChatMsg = {
+        msgId: generateMsgId(),
         role: 'system',
         html: `⚙️ Reset failed: ${errMsg}`,
         rawText: '',
