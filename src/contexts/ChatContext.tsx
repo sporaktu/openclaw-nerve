@@ -53,6 +53,7 @@ const RECOVERY_LIMITS: Record<RecoveryReason, number> = {
   'frame-gap': 80,
   'chat-gap': 80,
   reconnect: 120,
+  'subagent-complete': 500,
 };
 
 /** Strip code blocks, markdown noise, and validate text is speakable for TTS fallback. */
@@ -550,8 +551,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const classified = classifyStreamEvent(msg);
       if (!classified) return;
 
-      // Ignore events for other sessions
-      if (classified.sessionKey !== currentSessionRef.current) return;
+      // Sub-agent completion: when a child session finishes, refresh parent history
+      // since the gateway doesn't emit events on the parent session.
+      const currentSk = currentSessionRef.current;
+      if (classified.sessionKey !== currentSk) {
+        if (
+          classified.sessionKey?.startsWith(currentSk + ':subagent:') &&
+          (classified.type === 'chat_final' || classified.type === 'lifecycle_end')
+        ) {
+          triggerRecovery('subagent-complete');
+        }
+        return;
+      }
 
       // Track gateway frame sequence — only for current session to avoid
       // false-positive gap recovery from unrelated event traffic.

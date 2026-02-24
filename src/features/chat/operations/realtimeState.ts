@@ -1,6 +1,6 @@
 import type { ChatSendStatus } from './sendMessage';
 
-export type RecoveryReason = 'frame-gap' | 'chat-gap' | 'reconnect' | 'unrenderable-final';
+export type RecoveryReason = 'frame-gap' | 'chat-gap' | 'reconnect' | 'unrenderable-final' | 'subagent-complete';
 
 export interface RunState {
   runId: string;
