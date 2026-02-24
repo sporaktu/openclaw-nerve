@@ -649,10 +649,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         const delta = extractStreamDelta(cp);
         if (delta) {
-          // Detect cumulative vs incremental deltas.  Require the buffer to have
-          // meaningful length (≥8 chars) before applying the startsWith heuristic
-          // to avoid false positives on short common prefixes.
-          if (run.bufferText.length >= 8 && delta.cleaned.startsWith(run.bufferText)) {
+          // Detect cumulative vs incremental deltas.
+          // Cumulative: new delta contains existing buffer as prefix (replace).
+          // Incremental: new delta is a small chunk to append.
+          // Heuristic: if delta is longer than or equal to current buffer AND
+          // starts with existing text, it's cumulative. For very short buffers
+          // (<8 chars), also treat as cumulative if delta length >= buffer length
+          // to avoid doubling on the first few deltas.
+          const isCumulative =
+            run.bufferText.length === 0 ||
+            (delta.cleaned.length >= run.bufferText.length && delta.cleaned.startsWith(run.bufferText)) ||
+            (run.bufferText.length < 8 && delta.cleaned.length >= run.bufferText.length);
+          if (isCumulative) {
             run.bufferText = delta.cleaned;
           } else {
             run.bufferText += delta.cleaned;
