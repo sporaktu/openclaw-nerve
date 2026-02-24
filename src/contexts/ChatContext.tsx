@@ -86,12 +86,17 @@ function isLikelyDuplicateMessage(a: ChatMsg, b: ChatMsg): boolean {
   const timeDiffMs = Math.abs(a.timestamp.getTime() - b.timestamp.getTime());
   if (timeDiffMs > 60_000) return false;
 
+  // Compare extracted image URLs — same text with different images is NOT a duplicate.
+  const aImgs = (a.extractedImages || []).map(i => i.url).sort().join('|');
+  const bImgs = (b.extractedImages || []).map(i => i.url).sort().join('|');
+
   return (
     a.role === b.role &&
     normalizeComparableText(a.rawText) === normalizeComparableText(b.rawText) &&
     Boolean(a.isThinking) === Boolean(b.isThinking) &&
     (a.toolGroup?.length || 0) === (b.toolGroup?.length || 0) &&
-    (a.images?.length || 0) === (b.images?.length || 0)
+    (a.images?.length || 0) === (b.images?.length || 0) &&
+    aImgs === bImgs
   );
 }
 
@@ -340,20 +345,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const triggerRecovery = useCallback((reason: RecoveryReason) => {
     if (recoveryRef.current.inFlight) return;
 
-    // Don't run recovery while we're actively streaming deltas — the streaming
-    // bubble handles display and chat_final will bring the authoritative state.
-    // Recovery mid-stream causes thinking blocks from the gateway transcript to
-    // appear as separate bubbles alongside the live streaming bubble.
-    // Exception: 'reconnect' and 'unrenderable-final' are post-generation recovery
-    // and should always proceed.
-    const activeRun = activeRunIdRef.current;
-    const hasActiveDelta = activeRun
-      ? (runsRef.current.get(activeRun)?.bufferText.length ?? 0) > 0
-      : false;
-    if (hasActiveDelta && reason !== 'reconnect' && reason !== 'unrenderable-final') {
-      return;
-    }
-
     clearRecoveryTimer();
     recoveryRef.current.reason = reason;
     setStream(prev => ({ ...prev, isRecovering: true, recoveryReason: reason }));
@@ -382,7 +373,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         // chat_final may have occurred while we were loading.
         if (capturedGeneration !== recoveryGenerationRef.current) return;
 
-        const merged = mergeRecoveredTail(allMessagesRef.current, recovered);
+        // When streaming is active, the recovered transcript may include the
+        // partial assistant text that the streaming bubble is already showing.
+        // Filter it out to avoid duplication, but keep thinking blocks so the
+        // user can see reasoning in real time.
+        const activeRun = activeRunIdRef.current;
+        const activeBuffer = activeRun
+          ? runsRef.current.get(activeRun)?.bufferText || ''
+          : '';
+        const filtered = activeBuffer.length > 0
+          ? recovered.filter(msg => {
+            // Always keep non-assistant messages (user, system, etc.)
+            if (msg.role !== 'assistant') return true;
+            // Always keep thinking blocks
+            if (msg.isThinking) return true;
+            // Always keep tool groups / intermediate tool messages
+            if (msg.toolGroup || msg.intermediate) return true;
+            // Drop assistant text that's a substring of the active stream buffer
+            // (this is the partial text the streaming bubble is already rendering)
+            const text = (msg.rawText || '').trim();
+            if (text && activeBuffer.includes(text)) return false;
+            return true;
+          })
+          : recovered;
+
+        const merged = mergeRecoveredTail(allMessagesRef.current, filtered);
         applyMessageWindow(merged, false);
       } catch (err) {
         console.debug('[ChatContext] Recovery failed:', err);
@@ -608,7 +623,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // ── Chat events ───────────────────────────────────────────────────────
       const cp = classified.chatPayload!;
       const activeRunBefore = activeRunIdRef.current;
-      const runId = resolveRunId(classified.runId, activeRunBefore, currentSessionRef.current);
+      const runId = resolveRunId(classified.runId, activeRunBefore);
 
       // If no runId and no active run, ignore orphan event to prevent phantom run entries.
       if (!runId) return;
@@ -813,6 +828,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           clearScheduledStreamFlush();
           setStream(prev => ({ ...prev, html: '', runId: undefined }));
         }
+
+        // Attempt to load whatever partial transcript exists on the gateway.
+        triggerRecovery('unrenderable-final');
 
         thinkingStartRef.current = null;
         thinkingDurationRef.current = null;

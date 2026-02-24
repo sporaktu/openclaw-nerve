@@ -8,7 +8,7 @@ export interface RunState {
   startedAt: number;
   lastChatSeq: number | null;
   lastFrameSeq: number | null;
-  /** Raw (uncleaned) delta text — used for cumulative detection */
+  /** Raw (uncleaned) delta text — preserved for debugging */
   bufferRaw: string;
   /** Cleaned delta text (TTS/chart markers stripped) — used for display */
   bufferText: string;
@@ -66,8 +66,6 @@ export function getOrCreateRunState(
 export function resolveRunId(
   runId: string | undefined,
   activeRunId: string | null,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for call-site compatibility
-  _sessionKey: string,
 ): string | null {
   if (runId) return runId;
   if (activeRunId) return activeRunId;
