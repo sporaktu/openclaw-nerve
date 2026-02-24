@@ -117,8 +117,14 @@ function mergeFinalMessages(existing: ChatMsg[], incoming: ChatMsg[]): ChatMsg[]
     // Avoid duplicating optimistic user bubbles if final payload repeats them.
     if (msg.role === 'user') {
       const recent = merged.slice(-6);
+      const msgImgs = (msg.extractedImages || []).map(i => i.url).sort().join('|');
       const duplicateRecentUser = recent.some(
-        (m) => m.role === 'user' && normalizeComparableText(m.rawText) === normalizeComparableText(msg.rawText),
+        (m) => {
+          if (m.role !== 'user') return false;
+          if (normalizeComparableText(m.rawText) !== normalizeComparableText(msg.rawText)) return false;
+          const mImgs = (m.extractedImages || []).map(i => i.url).sort().join('|');
+          return mImgs === msgImgs;
+        },
       );
       if (duplicateRecentUser) continue;
     }
@@ -324,10 +330,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     flush.rafId = requestAnimationFrame(() => {
       flush.rafId = null;
+      // Clear the fallback timeout — rAF already handled it.
+      if (flush.timeoutId) {
+        clearTimeout(flush.timeoutId);
+        flush.timeoutId = null;
+      }
       flushStreamingUpdate();
     });
 
-    // Hidden-tab / throttled-rAF fallback.
+    // Hidden-tab / throttled-rAF fallback — only fires if rAF didn't.
     flush.timeoutId = setTimeout(() => {
       if (flush.rafId !== null) {
         cancelAnimationFrame(flush.rafId);
