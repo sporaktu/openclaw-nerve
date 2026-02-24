@@ -285,7 +285,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const currentVisible = Math.min(visibleCountRef.current, all.length);
+    const currentVisible = all.length === 0
+      ? 0
+      : Math.max(DEFAULT_VISIBLE_COUNT, Math.min(visibleCountRef.current, all.length));
     setHasMore(all.length > currentVisible);
     setMessages(all.slice(-currentVisible));
   }, []);
