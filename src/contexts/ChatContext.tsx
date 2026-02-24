@@ -757,6 +757,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           activeRunIdRef.current = null;
         }
 
+        // Invalidate any in-flight recovery so stale results don't overwrite abort state.
+        recoveryGenerationRef.current += 1;
+
         // Keep partial text if gateway includes it in aborted payload.
         const partialMessagesRaw = extractFinalMessages(cp);
         if (partialMessagesRaw.length > 0) {
@@ -798,6 +801,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (activeRunIdRef.current === runId) {
           activeRunIdRef.current = null;
         }
+
+        // Invalidate any in-flight recovery so stale results don't overwrite error state.
+        recoveryGenerationRef.current += 1;
 
         if (isActiveRun) {
           setIsGenerating(false);
