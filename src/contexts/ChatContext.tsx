@@ -535,26 +535,33 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // new content while the sub-agent is active. Stops when session state is idle/done.
   const isSubagentSession = currentSession?.includes(':subagent:') ?? false;
   const subagentSessionState = isSubagentSession
-    ? sessions.find(s => getSessionKey(s) === currentSession)?.state
+    ? sessions.find(s => getSessionKey(s) === currentSession)?.state?.toLowerCase()
     : undefined;
-  const isSubagentActive = isSubagentSession && (
-    !subagentSessionState ||
-    subagentSessionState === 'thinking' ||
-    subagentSessionState === 'generating' ||
-    subagentSessionState === 'streaming' ||
-    subagentSessionState === 'tool_use' ||
-    subagentSessionState === 'started' ||
-    subagentSessionState === 'running'
-  );
+  const ACTIVE_STATES = new Set(['thinking', 'generating', 'streaming', 'tool_use', 'started', 'running']);
+  const isSubagentActive = isSubagentSession && !!subagentSessionState && ACTIVE_STATES.has(subagentSessionState);
+  const subagentPollInFlightRef = useRef(false);
   useEffect(() => {
     if (!isSubagentActive || connectionState !== 'connected') return;
 
-    const pollInterval = setInterval(() => {
-      loadHistory(currentSession);
+    const pollInterval = setInterval(async () => {
+      if (subagentPollInFlightRef.current) return; // single-flight guard
+      subagentPollInFlightRef.current = true;
+      try {
+        const sk = currentSessionRef.current;
+        const result = await loadChatHistory({ rpc, sessionKey: sk, limit: 500 });
+        // Only apply if still viewing the same session (stale guard)
+        if (sk === currentSessionRef.current) {
+          applyMessageWindow(result, false); // non-reset: preserve scroll position
+        }
+      } catch { /* best-effort */ }
+      subagentPollInFlightRef.current = false;
     }, 3000);
 
-    return () => clearInterval(pollInterval);
-  }, [isSubagentActive, connectionState, currentSession, loadHistory]);
+    return () => {
+      clearInterval(pollInterval);
+      subagentPollInFlightRef.current = false;
+    };
+  }, [isSubagentActive, connectionState, currentSession, rpc, applyMessageWindow]);
 
   // One-shot watchdog while generating: if stream stalls, recover once.
   useEffect(() => {
@@ -586,7 +593,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const classified = classifyStreamEvent(msg);
       if (!classified) return;
 
-      // DEBUG: log ALL classified events before session filter
 
       // Sub-agent completion: when a child session finishes, refresh parent history
       // since the gateway doesn't emit events on the parent session.
@@ -671,7 +677,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // DEBUG: log all agent event types for this session
 
         if (type === 'agent_tool_result') {
           const completedId = ap.data?.toolCallId;
@@ -681,14 +686,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           // Merge new thinking/tool messages from completed steps without resetting.
           // Debounced to coalesce rapid tool completions into one fetch.
           if (toolResultRefreshRef.current) clearTimeout(toolResultRefreshRef.current);
+          const capturedSession = currentSessionRef.current;
+          const capturedGeneration = recoveryGenerationRef.current;
           toolResultRefreshRef.current = setTimeout(async () => {
             toolResultRefreshRef.current = null;
             try {
               const recovered = await loadChatHistory({
                 rpc,
-                sessionKey: currentSessionRef.current,
+                sessionKey: capturedSession,
                 limit: 100,
               });
+              // Stale guard: discard if session switched or generation changed
+              if (capturedSession !== currentSessionRef.current) return;
+              if (capturedGeneration !== recoveryGenerationRef.current) return;
               if (recovered.length > 0) {
                 const merged = mergeRecoveredTail(allMessagesRef.current, recovered);
                 applyMessageWindow(merged, false);
