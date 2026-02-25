@@ -537,8 +537,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const subagentSessionState = isSubagentSession
     ? sessions.find(s => getSessionKey(s) === currentSession)?.state?.toLowerCase()
     : undefined;
-  const ACTIVE_STATES = new Set(['thinking', 'generating', 'streaming', 'tool_use', 'started', 'running']);
-  const isSubagentActive = isSubagentSession && !!subagentSessionState && ACTIVE_STATES.has(subagentSessionState);
+  const DONE_STATES = new Set(['idle', 'done', 'completed', 'error', 'aborted', 'timeout', 'stopped', 'finished', 'ended', 'cancelled']);
+  const isSubagentActive = isSubagentSession && !(subagentSessionState && DONE_STATES.has(subagentSessionState));
   const subagentPollInFlightRef = useRef(false);
   useEffect(() => {
     if (!isSubagentActive || connectionState !== 'connected') return;
@@ -550,9 +550,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const sk = currentSessionRef.current;
         const result = await loadChatHistory({ rpc, sessionKey: sk, limit: 500 });
         // Only apply if still viewing the same session (stale guard)
-        if (sk === currentSessionRef.current) {
-          applyMessageWindow(result, false); // non-reset: preserve scroll position
-        }
+        if (sk !== currentSessionRef.current) return;
+        // Skip if nothing changed — prevents unnecessary re-renders/flashes.
+        // msgIds are regenerated each parse, so compare by count + last message content.
+        const prev = allMessagesRef.current;
+        if (
+          result.length === prev.length &&
+          result.length > 0 &&
+          result[result.length - 1]?.rawText === prev[prev.length - 1]?.rawText &&
+          result[result.length - 1]?.role === prev[prev.length - 1]?.role
+        ) return; // no change
+        applyMessageWindow(result, false); // non-reset: preserve scroll position
       } catch { /* best-effort */ }
       subagentPollInFlightRef.current = false;
     }, 3000);
