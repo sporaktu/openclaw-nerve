@@ -126,6 +126,12 @@ export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
     edgeTtsVoices: { female: 'de-DE-KatjaNeural', male: 'de-DE-ConradNeural' },
     qwen3Language: 'German',
   },
+  {
+    code: 'tr', name: 'Turkish', nativeName: 'Türkçe',
+    whisperCode: 'tr',
+    edgeTtsVoices: { female: 'tr-TR-EmelNeural', male: 'tr-TR-AhmetNeural' },
+    qwen3Language: null, // Not supported by Qwen3
+  },
 ];
 
 export const DEFAULT_LANGUAGE = 'en';
@@ -137,6 +143,7 @@ export const DEFAULT_LANGUAGE = 'en';
 export interface LanguageVoicePhrases {
   stopPhrases: string[];
   cancelPhrases: string[];
+  wakePhrases?: string[];  // Optional — overrides default "hey <agent>" for this language
 }
 
 export const DEFAULT_VOICE_PHRASES: Record<string, LanguageVoicePhrases> = {
@@ -183,5 +190,9 @@ export const DEFAULT_VOICE_PHRASES: Record<string, LanguageVoicePhrases> = {
   de: {
     stopPhrases: ['sende', 'fertig', "das war's", 'erledigt', 'abschicken'],
     cancelPhrases: ['abbrechen', 'vergiss es', 'lass es'],
+  },
+  tr: {
+    stopPhrases: ['gönder', 'tamam', 'bitti', 'bu kadar', 'yolla'],
+    cancelPhrases: ['iptal', 'boşver', 'vazgeç'],
   },
 };

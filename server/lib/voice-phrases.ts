@@ -106,10 +106,17 @@ export function getVoicePhrases(lang?: string): LanguageVoicePhrases {
   }
 
   // Merge: language-specific + English fallback (deduplicated)
-  return {
+  const merged: LanguageVoicePhrases = {
     stopPhrases: [...new Set([...langPhrases.stopPhrases, ...enPhrases.stopPhrases])],
     cancelPhrases: [...new Set([...langPhrases.cancelPhrases, ...enPhrases.cancelPhrases])],
   };
+
+  // Wake phrases: language-specific only (no English merge — these replace, not augment)
+  if (langPhrases.wakePhrases?.length) {
+    merged.wakePhrases = langPhrases.wakePhrases;
+  }
+
+  return merged;
 }
 
 /**
@@ -134,10 +141,14 @@ export function hasCustomPhrases(lang: string): boolean {
  */
 export function setLanguagePhrases(lang: string, phrases: LanguageVoicePhrases): void {
   const store = readStore();
-  store[lang] = {
+  const entry: LanguageVoicePhrases = {
     stopPhrases: phrases.stopPhrases.filter(p => p.trim().length > 0),
     cancelPhrases: phrases.cancelPhrases.filter(p => p.trim().length > 0),
   };
+  if (phrases.wakePhrases?.length) {
+    entry.wakePhrases = phrases.wakePhrases.filter(p => p.trim().length > 0);
+  }
+  store[lang] = entry;
   writeStore(store);
 }
 

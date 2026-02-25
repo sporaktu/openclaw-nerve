@@ -1,13 +1,19 @@
 /**
- * VoicePhrasesModal — shown when switching to a non-English language
- * that doesn't have custom voice phrases configured yet.
+ * VoicePhrasesModal — configure voice phrases per language.
  *
- * Lets the user set stop phrases (send), cancel phrases (abort),
- * pre-populated with translated defaults.
+ * Shown when switching to a non-English language without configured phrases,
+ * or anytime via the "Voice Phrases" button in settings.
+ *
+ * Lets the user set:
+ * - Wake phrases (activate listening)
+ * - Stop phrases (send message)
+ * - Cancel phrases (discard message)
+ *
+ * Pre-populated with translated defaults.
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Globe, Plus, Trash2 } from 'lucide-react';
+import { Globe, Plus, Trash2, Mic, Send, XCircle } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -29,6 +35,52 @@ interface PhrasesData {
   source: string;
   stopPhrases: string[];
   cancelPhrases: string[];
+  wakePhrases?: string[];
+}
+
+function PhraseList({
+  phrases,
+  onChange,
+  onAdd,
+  onRemove,
+  placeholder,
+}: {
+  phrases: string[];
+  onChange: (index: number, value: string) => void;
+  onAdd: () => void;
+  onRemove: (index: number) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      {phrases.map((phrase, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <input
+            type="text"
+            value={phrase}
+            onChange={e => onChange(i, e.target.value)}
+            className="flex-1 px-3 py-1.5 text-[12px] bg-background border border-border/60 focus:border-primary outline-none transition-colors rounded-sm"
+            placeholder={`${placeholder} ${i + 1}...`}
+            dir="auto"
+          />
+          {phrases.length > 1 && (
+            <button
+              onClick={() => onRemove(i)}
+              className="p-1 text-muted-foreground hover:text-red-400 transition-colors"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+        </div>
+      ))}
+      <button
+        onClick={onAdd}
+        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Plus size={10} /> Add
+      </button>
+    </div>
+  );
 }
 
 export function VoicePhrasesModal({
@@ -38,6 +90,7 @@ export function VoicePhrasesModal({
   languageName,
   languageNativeName,
 }: VoicePhrasesModalProps) {
+  const [wakePhrases, setWakePhrases] = useState<string[]>([]);
   const [stopPhrases, setStopPhrases] = useState<string[]>([]);
   const [cancelPhrases, setCancelPhrases] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -50,11 +103,13 @@ export function VoicePhrasesModal({
     fetch(`/api/voice-phrases/${languageCode}`)
       .then(r => r.json())
       .then((data: PhrasesData) => {
+        setWakePhrases(data.wakePhrases?.length ? data.wakePhrases : ['']);
         setStopPhrases(data.stopPhrases.length > 0 ? data.stopPhrases : ['']);
         setCancelPhrases(data.cancelPhrases.length > 0 ? data.cancelPhrases : ['']);
         setLoaded(true);
       })
       .catch(() => {
+        setWakePhrases(['']);
         setStopPhrases(['']);
         setCancelPhrases(['']);
         setLoaded(true);
@@ -62,8 +117,8 @@ export function VoicePhrasesModal({
   }, [open, languageCode]);
 
   const updatePhrase = useCallback(
-    (type: 'stop' | 'cancel', index: number, value: string) => {
-      const setter = type === 'stop' ? setStopPhrases : setCancelPhrases;
+    (type: 'wake' | 'stop' | 'cancel', index: number, value: string) => {
+      const setter = type === 'wake' ? setWakePhrases : type === 'stop' ? setStopPhrases : setCancelPhrases;
       setter(prev => {
         const next = [...prev];
         next[index] = value;
@@ -73,36 +128,36 @@ export function VoicePhrasesModal({
     [],
   );
 
-  const addPhrase = useCallback((type: 'stop' | 'cancel') => {
-    const setter = type === 'stop' ? setStopPhrases : setCancelPhrases;
+  const addPhrase = useCallback((type: 'wake' | 'stop' | 'cancel') => {
+    const setter = type === 'wake' ? setWakePhrases : type === 'stop' ? setStopPhrases : setCancelPhrases;
     setter(prev => [...prev, '']);
   }, []);
 
-  const removePhrase = useCallback((type: 'stop' | 'cancel', index: number) => {
-    const setter = type === 'stop' ? setStopPhrases : setCancelPhrases;
+  const removePhrase = useCallback((type: 'wake' | 'stop' | 'cancel', index: number) => {
+    const setter = type === 'wake' ? setWakePhrases : type === 'stop' ? setStopPhrases : setCancelPhrases;
     setter(prev => prev.filter((_, i) => i !== index));
   }, []);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
+      const body: Record<string, string[]> = {
+        stopPhrases: stopPhrases.filter(p => p.trim()),
+        cancelPhrases: cancelPhrases.filter(p => p.trim()),
+      };
+      const filteredWake = wakePhrases.filter(p => p.trim());
+      if (filteredWake.length > 0) {
+        body.wakePhrases = filteredWake;
+      }
       const resp = await fetch(`/api/voice-phrases/${languageCode}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stopPhrases: stopPhrases.filter(p => p.trim()),
-          cancelPhrases: cancelPhrases.filter(p => p.trim()),
-        }),
+        body: JSON.stringify(body),
       });
       if (resp.ok) onClose();
     } catch { /* ignore */ }
     setSaving(false);
-  }, [languageCode, stopPhrases, cancelPhrases, onClose]);
-
-  const handleSkip = useCallback(() => {
-    // Close without saving — English phrases will be used as fallback
-    onClose();
-  }, [onClose]);
+  }, [languageCode, wakePhrases, stopPhrases, cancelPhrases, onClose]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -113,97 +168,81 @@ export function VoicePhrasesModal({
             Voice Phrases — {languageName}
           </DialogTitle>
           <DialogDescription className="text-[12px] text-muted-foreground">
-            Set the words you'll say in {languageNativeName} to send or cancel voice messages.
-            English phrases always work as fallback.
+            Set the phrases you'll say in {languageNativeName} to control voice input.
+            English phrases always work as fallback for send &amp; cancel.
           </DialogDescription>
         </DialogHeader>
 
         {loaded && (
-          <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+          <div className="space-y-5 max-h-[55vh] overflow-y-auto pr-1">
+            {/* Wake Phrases */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Mic size={12} className="text-blue-400" />
+                <label className="text-[11px] font-semibold tracking-wide uppercase text-blue-400">
+                  Wake Phrases
+                </label>
+              </div>
+              <span className="text-[10px] text-muted-foreground block">
+                Say any of these to start listening (e.g. "Hey Kim" in your language). Leave empty to keep English wake word.
+              </span>
+              <PhraseList
+                phrases={wakePhrases}
+                onChange={(i, v) => updatePhrase('wake', i, v)}
+                onAdd={() => addPhrase('wake')}
+                onRemove={(i) => removePhrase('wake', i)}
+                placeholder="Wake phrase"
+              />
+            </div>
+
             {/* Stop (Send) Phrases */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Send size={12} className="text-green" />
                 <label className="text-[11px] font-semibold tracking-wide uppercase text-green">
                   Send Phrases
                 </label>
-                <span className="text-[10px] text-muted-foreground">
-                  Say any of these to send your message
-                </span>
               </div>
-              {stopPhrases.map((phrase, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={phrase}
-                    onChange={e => updatePhrase('stop', i, e.target.value)}
-                    className="flex-1 px-3 py-1.5 text-[12px] bg-background border border-border/60 focus:border-primary outline-none transition-colors"
-                    placeholder={`Send phrase ${i + 1}...`}
-                    dir="auto"
-                  />
-                  {stopPhrases.length > 1 && (
-                    <button
-                      onClick={() => removePhrase('stop', i)}
-                      className="p-1 text-muted-foreground hover:text-red-400 transition-colors"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                </div>
-              ))}
-              <button
-                onClick={() => addPhrase('stop')}
-                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Plus size={10} /> Add phrase
-              </button>
+              <span className="text-[10px] text-muted-foreground block">
+                Say any of these to send your message.
+              </span>
+              <PhraseList
+                phrases={stopPhrases}
+                onChange={(i, v) => updatePhrase('stop', i, v)}
+                onAdd={() => addPhrase('stop')}
+                onRemove={(i) => removePhrase('stop', i)}
+                placeholder="Send phrase"
+              />
             </div>
 
             {/* Cancel Phrases */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <XCircle size={12} className="text-orange" />
                 <label className="text-[11px] font-semibold tracking-wide uppercase text-orange">
                   Cancel Phrases
                 </label>
-                <span className="text-[10px] text-muted-foreground">
-                  Say any of these to discard your message
-                </span>
               </div>
-              {cancelPhrases.map((phrase, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={phrase}
-                    onChange={e => updatePhrase('cancel', i, e.target.value)}
-                    className="flex-1 px-3 py-1.5 text-[12px] bg-background border border-border/60 focus:border-primary outline-none transition-colors"
-                    placeholder={`Cancel phrase ${i + 1}...`}
-                    dir="auto"
-                  />
-                  {cancelPhrases.length > 1 && (
-                    <button
-                      onClick={() => removePhrase('cancel', i)}
-                      className="p-1 text-muted-foreground hover:text-red-400 transition-colors"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                </div>
-              ))}
-              <button
-                onClick={() => addPhrase('cancel')}
-                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Plus size={10} /> Add phrase
-              </button>
+              <span className="text-[10px] text-muted-foreground block">
+                Say any of these to discard your message.
+              </span>
+              <PhraseList
+                phrases={cancelPhrases}
+                onChange={(i, v) => updatePhrase('cancel', i, v)}
+                onAdd={() => addPhrase('cancel')}
+                onRemove={(i) => removePhrase('cancel', i)}
+                placeholder="Cancel phrase"
+              />
             </div>
           </div>
         )}
 
         <DialogFooter className="gap-2 sm:gap-0">
           <button
-            onClick={handleSkip}
+            onClick={onClose}
             className="px-4 py-2 text-[11px] font-mono uppercase tracking-wide border border-border/60 text-muted-foreground hover:border-muted-foreground transition-colors"
           >
-            Skip (use English)
+            {languageCode ? 'Close' : 'Skip'}
           </button>
           <button
             onClick={handleSave}

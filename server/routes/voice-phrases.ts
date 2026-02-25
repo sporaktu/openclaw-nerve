@@ -66,9 +66,9 @@ app.put('/api/voice-phrases/:lang', async (c) => {
   if (!valid) return c.text(`Unsupported language: ${lang}`, 400);
 
   try {
-    const body = await c.req.json() as { stopPhrases?: string[]; cancelPhrases?: string[] };
-    if (!body.stopPhrases && !body.cancelPhrases) {
-      return c.text('At least one of stopPhrases or cancelPhrases required', 400);
+    const body = await c.req.json() as { stopPhrases?: string[]; cancelPhrases?: string[]; wakePhrases?: string[] };
+    if (!body.stopPhrases && !body.cancelPhrases && !body.wakePhrases) {
+      return c.text('At least one of stopPhrases, cancelPhrases, or wakePhrases required', 400);
     }
 
     // Merge with existing or defaults
@@ -76,6 +76,7 @@ app.put('/api/voice-phrases/:lang', async (c) => {
     setLanguagePhrases(lang, {
       stopPhrases: Array.isArray(body.stopPhrases) ? body.stopPhrases : existing.stopPhrases,
       cancelPhrases: Array.isArray(body.cancelPhrases) ? body.cancelPhrases : existing.cancelPhrases,
+      wakePhrases: Array.isArray(body.wakePhrases) ? body.wakePhrases : existing.wakePhrases,
     });
 
     return c.json({ ok: true, lang });

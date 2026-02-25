@@ -508,6 +508,30 @@ export function AudioSettings({
             </>
           )}
 
+          {/* Configure Voice Phrases button — always visible for non-English */}
+          {langState.language !== 'auto' && langState.language !== 'en' && (
+            <button
+              onClick={() => {
+                const lang = langState.supported.find(l => l.code === langState.language);
+                setPhrasesModal({
+                  open: true,
+                  code: langState.language,
+                  name: lang?.name || langState.language,
+                  nativeName: lang?.nativeName || langState.language,
+                });
+              }}
+              className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-primary transition-colors group"
+            >
+              <div className="flex items-center gap-3">
+                <Mic size={14} className="text-primary" aria-hidden="true" />
+                <span className="text-[12px]">Voice Phrases</span>
+              </div>
+              <span className="text-[10px] text-muted-foreground group-hover:text-primary transition-colors">
+                {phrasesStatus[langState.language]?.configured ? 'Edit ›' : 'Configure ›'}
+              </span>
+            </button>
+          )}
+
           {/* Edge TTS voice gender toggle */}
           {ttsProvider === 'edge' && langState.language !== 'auto' && (
             <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">

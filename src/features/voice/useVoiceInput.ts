@@ -7,6 +7,7 @@ import { playWakePing, playSubmitPing, playCancelPing, ensureAudioContext } from
 interface VoicePhrases {
   stopPhrases: string[];
   cancelPhrases: string[];
+  wakePhrases?: string[];
 }
 
 const DEFAULT_PHRASES: VoicePhrases = {
@@ -96,8 +97,8 @@ export function useVoiceInput(onTranscription: (text: string) => void, agentName
     try { localStorage.setItem(WAKE_WORD_KEY, String(wakeWordEnabled)); } catch { /* noop */ }
   }, [wakeWordEnabled]);
 
-  // Dynamic wake phrases based on agent name
-  const wakePhrases = useMemo(() => buildWakePhrases(agentName), [agentName]);
+  // Dynamic wake phrases based on agent name (default English)
+  const defaultWakePhrases = useMemo(() => buildWakePhrases(agentName), [agentName]);
 
   // Phrases loaded from server config — refetch when language changes
   const [phrases, setPhrases] = useState<VoicePhrases>(phrasesCache?.phrases || DEFAULT_PHRASES);
@@ -105,6 +106,15 @@ export function useVoiceInput(onTranscription: (text: string) => void, agentName
     invalidatePhrasesCache();
     fetchVoicePhrases(language).then(setPhrases);
   }, [language]);
+
+  // Merge server wake phrases with default English ones
+  const wakePhrases = useMemo(() => {
+    if (phrases.wakePhrases?.length) {
+      return [...new Set([...phrases.wakePhrases, ...defaultWakePhrases])];
+    }
+    return defaultWakePhrases;
+  }, [phrases.wakePhrases, defaultWakePhrases]);
+
   const stopPhrasesRegex = useMemo(
     () => buildStopRegexFromPhrases(phrases.stopPhrases, phrases.cancelPhrases, agentName),
     [phrases, agentName],
