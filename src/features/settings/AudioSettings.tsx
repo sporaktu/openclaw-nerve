@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Volume2, VolumeX, Mic, MicOff, Download, AlertTriangle, KeyRound, Globe } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { InlineSelect } from '@/components/ui/InlineSelect';
 import type { TTSProvider } from '@/features/tts/useTTS';
 import type { STTProvider } from '@/contexts/SettingsContext';
 import { useTTSConfig } from '@/features/tts/useTTSConfig';
+import { VoicePhrasesModal } from './VoicePhrasesModal';
 
 // ─── Language types ──────────────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ interface LanguageSupportEntry {
   code: string;
   name: string;
   nativeName: string;
+  edgeTtsVoices: { female: string; male: string };
   stt: { local: boolean; openai: boolean };
   tts: { edge: boolean; qwen3: boolean; openai: boolean };
 }
@@ -370,7 +372,7 @@ export function AudioSettings({
 }: AudioSettingsProps) {
   const models = PROVIDER_MODELS[ttsProvider] || [];
   const { config, saved, updateField } = useTTSConfig();
-  const { state: langState, isMultilingual, setLanguage, setGender } = useLanguage();
+  const { state: langState, support, isMultilingual, setLanguage, setGender } = useLanguage();
 
   // Fetch API key status once on mount
   const [apiKeys, setApiKeys] = useState<{ openai: boolean; replicate: boolean }>({ openai: true, replicate: true });
@@ -386,6 +388,43 @@ export function AudioSettings({
       .catch(() => {});
   }, []);
 
+  // Voice phrases modal — opens when switching to non-English without configured phrases
+  const [phrasesModal, setPhrasesModal] = useState<{
+    open: boolean;
+    code: string;
+    name: string;
+    nativeName: string;
+  }>({ open: false, code: '', name: '', nativeName: '' });
+
+  // Track which languages have custom phrases
+  const [phrasesStatus, setPhrasesStatus] = useState<Record<string, { configured: boolean }>>({});
+  useEffect(() => {
+    fetch('/api/voice-phrases/status')
+      .then(r => r.json())
+      .then(setPhrasesStatus)
+      .catch(() => {});
+  }, [phrasesModal.open]); // Refetch after modal closes (might have saved)
+
+  // Wrap setLanguage to check for phrases configuration
+  const handleLanguageChange = useCallback((code: string) => {
+    setLanguage(code);
+    // Notify InputBar that language changed
+    window.dispatchEvent(new CustomEvent('nerve:language-changed'));
+    // If switching to non-English and no custom phrases configured, show modal
+    if (code !== 'en' && code !== 'auto') {
+      const status = phrasesStatus[code];
+      if (!status?.configured) {
+        const lang = langState?.supported.find(l => l.code === code);
+        setPhrasesModal({
+          open: true,
+          code,
+          name: lang?.name || code,
+          nativeName: lang?.nativeName || code,
+        });
+      }
+    }
+  }, [setLanguage, phrasesStatus, langState?.supported]);
+
   const OPENAI_VOICES = [
     { value: 'alloy', label: 'Alloy' },
     { value: 'echo', label: 'Echo' },
@@ -395,15 +434,27 @@ export function AudioSettings({
     { value: 'shimmer', label: 'Shimmer' },
   ];
 
-  const EDGE_VOICES = [
-    { value: 'en-US-AriaNeural', label: 'Aria (US)' },
-    { value: 'en-US-JennyNeural', label: 'Jenny (US)' },
-    { value: 'en-US-GuyNeural', label: 'Guy (US)' },
-    { value: 'en-GB-SoniaNeural', label: 'Sonia (GB)' },
-    { value: 'en-GB-RyanNeural', label: 'Ryan (GB)' },
-    { value: 'en-AU-NatashaNeural', label: 'Natasha (AU)' },
-    { value: 'en-IE-EmilyNeural', label: 'Emily (IE)' },
-  ];
+  // Build Edge voice options from selected language
+  const edgeVoicesForLang = useMemo(() => {
+    const lang = langState?.language || 'en';
+    const entry = langState?.supported.find((l) => l.code === lang);
+    // If we have language-specific voices from the support API, use them
+    const supportEntry = support?.find((s) => s.code === lang);
+    if (supportEntry?.edgeTtsVoices) {
+      const { female, male } = supportEntry.edgeTtsVoices;
+      const fName = female.replace(/Neural$/, '').split('-').pop() || 'Female';
+      const mName = male.replace(/Neural$/, '').split('-').pop() || 'Male';
+      return [
+        { value: female, label: `${fName} (${entry?.name || lang})` },
+        { value: male, label: `${mName} (${entry?.name || lang})` },
+      ];
+    }
+    // Fallback to English voices
+    return [
+      { value: 'en-US-AriaNeural', label: 'Aria (US)' },
+      { value: 'en-US-GuyNeural', label: 'Guy (US)' },
+    ];
+  }, [langState?.language, langState?.supported, support]);
 
   return (
     <div className="space-y-4">
@@ -422,7 +473,7 @@ export function AudioSettings({
             </div>
             <InlineSelect
               value={langState.language}
-              onChange={setLanguage}
+              onChange={handleLanguageChange}
               options={[
                 { value: 'auto', label: 'Auto-detect' },
                 ...langState.supported.map((l) => ({
@@ -598,7 +649,7 @@ export function AudioSettings({
               <InlineSelect
                 value={config.edge.voice}
                 onChange={(v) => updateField('edge', 'voice', v)}
-                options={EDGE_VOICES}
+                options={edgeVoicesForLang}
                 ariaLabel="Edge Voice"
                 menuClassName="min-w-[160px]"
               />
@@ -692,6 +743,19 @@ export function AudioSettings({
       {sttProvider === 'local' && (
         <SttModelSelector model={sttModel} onModelChange={onSttModelChange} />
       )}
+
+      {/* Voice Phrases Modal — shown when switching to non-English language */}
+      <VoicePhrasesModal
+        open={phrasesModal.open}
+        onClose={() => {
+          setPhrasesModal(prev => ({ ...prev, open: false }));
+          // Phrases may have been saved — notify voice input to refetch
+          window.dispatchEvent(new CustomEvent('nerve:language-changed'));
+        }}
+        languageCode={phrasesModal.code}
+        languageName={phrasesModal.name}
+        languageNativeName={phrasesModal.nativeName}
+      />
     </div>
   );
 }

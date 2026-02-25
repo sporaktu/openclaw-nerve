@@ -129,3 +129,59 @@ export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
 ];
 
 export const DEFAULT_LANGUAGE = 'en';
+
+// ─── Default voice phrases per language ──────────────────────────────────────
+// Used as suggestions when user first selects a non-English language.
+// English defaults are the canonical set; others are translations.
+
+export interface LanguageVoicePhrases {
+  stopPhrases: string[];
+  cancelPhrases: string[];
+}
+
+export const DEFAULT_VOICE_PHRASES: Record<string, LanguageVoicePhrases> = {
+  en: {
+    stopPhrases: ["boom", "i'm done", "im done", "all right i'm done", "alright i'm done", "that's it", "thats it", "send it", "done"],
+    cancelPhrases: ['cancel', 'never mind', 'nevermind'],
+  },
+  zh: {
+    stopPhrases: ['发送', '完了', '好了', '搞定', '就这样'],
+    cancelPhrases: ['取消', '算了'],
+  },
+  hi: {
+    stopPhrases: ['भेजो', 'हो गया', 'बस', 'भेज दो', 'बस इतना'],
+    cancelPhrases: ['रद्द', 'छोड़ो', 'रहने दो'],
+  },
+  es: {
+    stopPhrases: ['enviar', 'listo', 'ya está', 'terminé', 'envíalo'],
+    cancelPhrases: ['cancelar', 'déjalo', 'olvídalo'],
+  },
+  fr: {
+    stopPhrases: ['envoie', 'terminé', "c'est tout", 'fini', 'envoyer'],
+    cancelPhrases: ['annuler', 'laisse tomber', "tant pis"],
+  },
+  ar: {
+    stopPhrases: ['أرسل', 'خلاص', 'تم', 'انتهيت', 'كفاية'],
+    cancelPhrases: ['إلغاء', 'خلاص ما أبي', 'لا تهتم'],
+  },
+  bn: {
+    stopPhrases: ['পাঠাও', 'হয়ে গেছে', 'এটাই', 'শেষ'],
+    cancelPhrases: ['বাতিল', 'থাক', 'দরকার নেই'],
+  },
+  pt: {
+    stopPhrases: ['enviar', 'pronto', 'é isso', 'terminei', 'manda'],
+    cancelPhrases: ['cancelar', 'deixa', 'esquece'],
+  },
+  ru: {
+    stopPhrases: ['отправь', 'готово', 'всё', 'отправить', 'хватит'],
+    cancelPhrases: ['отмена', 'забудь', 'не надо'],
+  },
+  ja: {
+    stopPhrases: ['送って', '送信', '以上', '終わり', 'おわり'],
+    cancelPhrases: ['キャンセル', 'やめて', 'いいや'],
+  },
+  de: {
+    stopPhrases: ['sende', 'fertig', "das war's", 'erledigt', 'abschicken'],
+    cancelPhrases: ['abbrechen', 'vergiss es', 'lass es'],
+  },
+};

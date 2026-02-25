@@ -14,22 +14,30 @@ const DEFAULT_PHRASES: VoicePhrases = {
   cancelPhrases: ['cancel', 'never mind', 'nevermind'],
 };
 
-let phrasesCache: VoicePhrases | null = null;
+let phrasesCache: { lang: string; phrases: VoicePhrases } | null = null;
 
-async function fetchVoicePhrases(): Promise<VoicePhrases> {
-  if (phrasesCache) return phrasesCache;
+/** Fetch voice phrases for the given language (merged with English fallback on server). */
+async function fetchVoicePhrases(lang?: string): Promise<VoicePhrases> {
+  const effectiveLang = lang || 'en';
+  if (phrasesCache && phrasesCache.lang === effectiveLang) return phrasesCache.phrases;
   try {
-    const resp = await fetch('/api/voice-phrases', { signal: AbortSignal.timeout(3000) });
+    const resp = await fetch(`/api/voice-phrases?lang=${effectiveLang}`, { signal: AbortSignal.timeout(3000) });
     if (!resp.ok) return DEFAULT_PHRASES;
     const data = await resp.json();
-    phrasesCache = {
+    const phrases: VoicePhrases = {
       stopPhrases: Array.isArray(data.stopPhrases) ? data.stopPhrases : DEFAULT_PHRASES.stopPhrases,
       cancelPhrases: Array.isArray(data.cancelPhrases) ? data.cancelPhrases : DEFAULT_PHRASES.cancelPhrases,
     };
-    return phrasesCache;
+    phrasesCache = { lang: effectiveLang, phrases };
+    return phrases;
   } catch {
     return DEFAULT_PHRASES;
   }
+}
+
+/** Invalidate the phrase cache (call when language changes). */
+export function invalidatePhrasesCache(): void {
+  phrasesCache = null;
 }
 
 /** Build stop phrase regex dynamically from phrase arrays + agent name. */
@@ -66,7 +74,7 @@ function matchesPhrase(transcript: string, phrases: string[]): boolean {
  * @param onTranscription - Callback invoked with the cleaned transcription text.
  * @param agentName - Agent display name used to build dynamic wake phrases.
  */
-export function useVoiceInput(onTranscription: (text: string) => void, agentName: string = 'Agent') {
+export function useVoiceInput(onTranscription: (text: string) => void, agentName: string = 'Agent', language: string = 'en') {
   const [state, setState] = useState<VoiceState>('idle');
   const stateRef = useRef<VoiceState>('idle');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -91,9 +99,12 @@ export function useVoiceInput(onTranscription: (text: string) => void, agentName
   // Dynamic wake phrases based on agent name
   const wakePhrases = useMemo(() => buildWakePhrases(agentName), [agentName]);
 
-  // Phrases loaded from server config
-  const [phrases, setPhrases] = useState<VoicePhrases>(phrasesCache || DEFAULT_PHRASES);
-  useEffect(() => { fetchVoicePhrases().then(setPhrases); }, []);
+  // Phrases loaded from server config — refetch when language changes
+  const [phrases, setPhrases] = useState<VoicePhrases>(phrasesCache?.phrases || DEFAULT_PHRASES);
+  useEffect(() => {
+    invalidatePhrasesCache();
+    fetchVoicePhrases(language).then(setPhrases);
+  }, [language]);
   const stopPhrasesRegex = useMemo(
     () => buildStopRegexFromPhrases(phrases.stopPhrases, phrases.cancelPhrases, agentName),
     [phrases, agentName],

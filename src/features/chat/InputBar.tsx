@@ -63,9 +63,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
   }), []);
 
+  // Fetch current language for voice phrase matching
+  const [voiceLang, setVoiceLang] = useState('en');
+  useEffect(() => {
+    const fetchLang = () => {
+      fetch('/api/language')
+        .then(r => r.json())
+        .then(data => { if (data.language) setVoiceLang(data.language); })
+        .catch(() => {});
+    };
+    fetchLang();
+    // Listen for language changes from settings
+    const handler = () => fetchLang();
+    window.addEventListener('nerve:language-changed', handler);
+    return () => window.removeEventListener('nerve:language-changed', handler);
+  }, []);
+
   const { voiceState, wakeWordEnabled, toggleWakeWord } = useVoiceInput((text) => {
     onSend('[voice] ' + text);
-  }, agentName);
+  }, agentName, voiceLang);
 
   const processFiles = useCallback((files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));

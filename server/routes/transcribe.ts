@@ -246,6 +246,7 @@ app.get('/api/language/support', rateLimitGeneral, (c) => {
     code: l.code,
     name: l.name,
     nativeName: l.nativeName,
+    edgeTtsVoices: l.edgeTtsVoices,
     stt: {
       local: l.code === 'en' || isMultilingual,
       openai: true, // OpenAI Whisper supports all languages
