@@ -71,6 +71,12 @@ function buildWsUrl(): string {
   );
 }
 
+/** Derive BCP-47 locale from an Edge voice id, e.g. zh-CN-XiaoxiaoNeural -> zh-CN. */
+function deriveVoiceLocale(voiceName: string): string {
+  const match = voiceName.match(/^([a-z]{2,3}-[A-Z]{2})-/);
+  return match?.[1] || 'en-US';
+}
+
 export async function synthesizeEdge(
   text: string,
   voice?: string,
@@ -151,10 +157,11 @@ export async function synthesizeEdge(
             return reject(err);
           }
 
+          const voiceLocale = deriveVoiceLocale(effectiveVoice);
           const ssmlMessage =
             `X-RequestId:${uuid()}\r\nContent-Type:application/ssml+xml\r\n` +
             `X-Timestamp:${new Date().toString()}Z\r\nPath:ssml\r\n\r\n` +
-            `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
+            `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${escapeXml(voiceLocale)}'>` +
             `<voice name='${escapeXml(effectiveVoice)}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>` +
             `${escapeXml(text)}</prosody></voice></speak>`;
 

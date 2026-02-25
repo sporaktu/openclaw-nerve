@@ -66,17 +66,32 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   // Fetch current language for voice phrase matching
   const [voiceLang, setVoiceLang] = useState('en');
   useEffect(() => {
+    let currentController: AbortController | null = null;
+
     const fetchLang = () => {
-      fetch('/api/language')
-        .then(r => r.json())
-        .then(data => { if (data.language) setVoiceLang(data.language); })
-        .catch(() => {});
+      currentController?.abort();
+      const controller = new AbortController();
+      currentController = controller;
+
+      fetch('/api/language', { signal: controller.signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!controller.signal.aborted && data?.language) {
+            setVoiceLang(data.language);
+          }
+        })
+        .catch((err) => {
+          if ((err as DOMException)?.name === 'AbortError') return;
+        });
     };
+
     fetchLang();
     // Listen for language changes from settings
-    const handler = () => fetchLang();
-    window.addEventListener('nerve:language-changed', handler);
-    return () => window.removeEventListener('nerve:language-changed', handler);
+    window.addEventListener('nerve:language-changed', fetchLang);
+    return () => {
+      window.removeEventListener('nerve:language-changed', fetchLang);
+      currentController?.abort();
+    };
   }, []);
 
   const { voiceState, wakeWordEnabled, toggleWakeWord } = useVoiceInput((text) => {

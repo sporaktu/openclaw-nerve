@@ -94,12 +94,17 @@ export function VoicePhrasesModal({
   const [stopPhrases, setStopPhrases] = useState<string[]>([]);
   const [cancelPhrases, setCancelPhrases] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Load defaults/existing phrases when modal opens
   useEffect(() => {
     if (!open || !languageCode) return;
+    setSaveError(null);
     fetch(`/api/voice-phrases/${languageCode}`)
-      .then(r => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`Failed to load phrases (${r.status})`);
+        return r.json();
+      })
       .then((data: PhrasesData) => {
         setWakePhrase(data.wakePhrases?.find((phrase) => phrase.trim().length > 0) || '');
         setStopPhrases(data.stopPhrases.length > 0 ? data.stopPhrases : ['']);
@@ -136,6 +141,8 @@ export function VoicePhrasesModal({
 
   const handleSave = useCallback(async () => {
     setSaving(true);
+    setSaveError(null);
+
     try {
       const body: Record<string, string[]> = {
         stopPhrases: stopPhrases.filter(p => p.trim()),
@@ -150,9 +157,19 @@ export function VoicePhrasesModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (resp.ok) onClose();
-    } catch { /* ignore */ }
-    setSaving(false);
+
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => 'Failed to save phrases');
+        setSaveError(msg || 'Failed to save phrases');
+        return;
+      }
+
+      onClose();
+    } catch {
+      setSaveError('Failed to save phrases. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   }, [languageCode, wakePhrase, stopPhrases, cancelPhrases, onClose]);
 
   return (
@@ -233,6 +250,9 @@ export function VoicePhrasesModal({
           </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
+          {saveError && (
+            <span className="text-[10px] text-red-400 sm:mr-auto">{saveError}</span>
+          )}
           <button
             onClick={onClose}
             className="px-4 py-2 text-[11px] font-mono uppercase tracking-wide border border-border/60 text-muted-foreground hover:border-muted-foreground transition-colors"

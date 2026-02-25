@@ -36,20 +36,45 @@ interface LanguageSupportEntry {
 function useLanguage() {
   const [state, setState] = useState<LanguageState | null>(null);
   const [support, setSupport] = useState<LanguageSupportEntry[] | null>(null);
-  const [isMultilingual, setIsMultilingual] = useState(true);
+  // Safer default: assume non-multilingual until support endpoint confirms otherwise.
+  const [isMultilingual, setIsMultilingual] = useState(false);
 
   // Fetch current language on mount
   useEffect(() => {
-    Promise.all([
-      fetch('/api/language').then((r) => r.json()),
-      fetch('/api/language/support').then((r) => r.json()),
-    ])
-      .then(([langData, supportData]) => {
-        setState(langData);
-        setSupport(supportData.languages);
-        setIsMultilingual(supportData.isMultilingual);
+    const langController = new AbortController();
+    const supportController = new AbortController();
+
+    fetch('/api/language', { signal: langController.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((langData) => {
+        if (!langController.signal.aborted && langData) {
+          setState(langData);
+        }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if ((err as DOMException)?.name !== 'AbortError') {
+          console.warn('[settings] failed to fetch /api/language');
+        }
+      });
+
+    fetch('/api/language/support', { signal: supportController.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((supportData) => {
+        if (!supportController.signal.aborted && supportData) {
+          setSupport(Array.isArray(supportData.languages) ? supportData.languages : null);
+          setIsMultilingual(Boolean(supportData.isMultilingual));
+        }
+      })
+      .catch((err) => {
+        if ((err as DOMException)?.name !== 'AbortError') {
+          console.warn('[settings] failed to fetch /api/language/support');
+        }
+      });
+
+    return () => {
+      langController.abort();
+      supportController.abort();
+    };
   }, []);
 
   const setLanguage = useCallback(async (language: string) => {
@@ -444,6 +469,15 @@ export function AudioSettings({
     window.dispatchEvent(new CustomEvent('nerve:language-changed'));
   }, [setLanguage]);
 
+  const currentLangInfo = useMemo(() => {
+    if (!langState) return null;
+    return langState.supported.find((l) => l.code === langState.language) || null;
+  }, [langState]);
+
+  const isNonEnglishLocalStt = Boolean(langState && langState.language !== 'en' && sttProvider === 'local');
+  const showEnglishOnlyWarning = isNonEnglishLocalStt && !isMultilingual;
+  const showTinyAccuracyWarning = isNonEnglishLocalStt && isMultilingual && sttModel === 'tiny';
+
   const OPENAI_VOICES = [
     { value: 'alloy', label: 'Alloy' },
     { value: 'echo', label: 'Echo' },
@@ -456,7 +490,6 @@ export function AudioSettings({
   // Build Edge voice options from selected language
   const edgeVoicesForLang = useMemo(() => {
     const lang = langState?.language || 'en';
-    const entry = langState?.supported.find((l) => l.code === lang);
     // If we have language-specific voices from the support API, use them
     const supportEntry = support?.find((s) => s.code === lang);
     if (supportEntry?.edgeTtsVoices) {
@@ -464,8 +497,8 @@ export function AudioSettings({
       const fName = female.replace(/Neural$/, '').split('-').pop() || 'Female';
       const mName = male.replace(/Neural$/, '').split('-').pop() || 'Male';
       return [
-        { value: female, label: `${fName} (${entry?.name || lang})` },
-        { value: male, label: `${mName} (${entry?.name || lang})` },
+        { value: female, label: `${fName} (${currentLangInfo?.name || lang})` },
+        { value: male, label: `${mName} (${currentLangInfo?.name || lang})` },
       ];
     }
     // Fallback to English voices
@@ -473,7 +506,7 @@ export function AudioSettings({
       { value: 'en-US-AriaNeural', label: 'Aria (US)' },
       { value: 'en-US-GuyNeural', label: 'Guy (US)' },
     ];
-  }, [langState?.language, langState?.supported, support]);
+  }, [currentLangInfo?.name, langState?.language, support]);
 
   const wakePhraseDisplay = useMemo(() => {
     const phrase = buildPrimaryWakePhrase(agentName, langState?.language || 'en', activeWakePhrase ? [activeWakePhrase] : undefined);
@@ -509,21 +542,21 @@ export function AudioSettings({
           </div>
 
           {/* Compatibility warnings */}
-          {langState.language !== 'en' && !isMultilingual && sttProvider === 'local' && (
+          {showEnglishOnlyWarning && (
             <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
               <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
               <span className="text-[10px] text-orange/80">
-                Current model is English-only. Switch to a multilingual model below for {langState.supported.find((l) => l.code === langState.language)?.name || langState.language} transcription.
+                Current model is English-only. Switch to a multilingual model below for {currentLangInfo?.name || langState.language} transcription.
               </span>
             </div>
           )}
 
-          {langState.language !== 'en' && sttProvider === 'local' && sttModel === 'tiny' && (
+          {showTinyAccuracyWarning && (
             <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
               <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
               <div className="flex-1 flex items-start justify-between gap-2">
                 <span className="text-[10px] text-orange/80">
-                  Tiny is fast, but conversational {langState.supported.find((l) => l.code === langState.language)?.name || langState.language} can be less accurate. Use base for better results.
+                  Tiny is fast, but conversational {currentLangInfo?.name || langState.language} can be less accurate. Use base for better results.
                 </span>
                 <button
                   onClick={() => onSttModelChange('base')}
@@ -540,12 +573,11 @@ export function AudioSettings({
             <div className="space-y-1">
               <button
                 onClick={() => {
-                  const lang = langState.supported.find(l => l.code === langState.language);
                   setPhrasesModal({
                     open: true,
                     code: langState.language,
-                    name: lang?.name || langState.language,
-                    nativeName: lang?.nativeName || langState.language,
+                    name: currentLangInfo?.name || langState.language,
+                    nativeName: currentLangInfo?.nativeName || langState.language,
                   });
                 }}
                 className="w-full flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-primary transition-colors group"
@@ -560,7 +592,7 @@ export function AudioSettings({
               </button>
               {!phrasesStatus[langState.language]?.configured && (
                 <span className="text-[10px] text-muted-foreground/80 px-1">
-                  Optional: add local stop/cancel words for {langState.supported.find((l) => l.code === langState.language)?.name || langState.language}.
+                  Optional: add local stop/cancel words for {currentLangInfo?.name || langState.language}.
                 </span>
               )}
             </div>

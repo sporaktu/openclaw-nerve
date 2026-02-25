@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir, cpus } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { initWhisper } from '@fugood/whisper.node';
-import type { WhisperContext } from '@fugood/whisper.node';
+import type { WhisperContext, TranscribeOptions } from '@fugood/whisper.node';
 import { config } from '../lib/config.js';
 import { WHISPER_MODEL_FILES, WHISPER_MODELS_BASE_URL } from '../lib/constants.js';
 import { resolveLanguage } from '../lib/language.js';
@@ -317,7 +317,7 @@ export async function transcribeLocal(
   }
 
   // Resolve the effective language for whisper
-  const effectiveLang = language || config.language || 'en';
+  const effectiveLang = language || config.language;
   const isEnModel = activeModel.endsWith('.en');
 
   // If language is non-English and model is .en, warn and fall back
@@ -349,8 +349,10 @@ export async function transcribeLocal(
 
     // 3. Get/init the singleton context and transcribe
     const ctx = await getContext();
-    const transcribeOpts: Record<string, unknown> = { temperature: 0.0 };
-    if (whisperLang) transcribeOpts.language = whisperLang;
+    const transcribeOpts: TranscribeOptions = {
+      temperature: 0.0,
+      language: whisperLang,
+    };
     const { promise } = ctx.transcribeFile(wavTmp, transcribeOpts);
 
     const result = await promise;
