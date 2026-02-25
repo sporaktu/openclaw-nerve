@@ -321,15 +321,15 @@ export async function transcribeLocal(
   const isEnModel = activeModel.endsWith('.en');
 
   // If language is non-English and model is .en, warn and fall back
-  if (effectiveLang !== 'en' && effectiveLang !== 'auto' && isEnModel) {
+  if (effectiveLang !== 'en' && isEnModel) {
     console.warn(
       `[whisper-local] Language "${effectiveLang}" requested but model "${activeModel}" is English-only. ` +
-      `Falling back to auto-detect. Switch to a multilingual model (e.g. "tiny") for better ${effectiveLang} support.`,
+      'Falling back to English. Switch to a multilingual model (e.g. "base") for better non-English support.',
     );
   }
 
-  // Build whisper options: .en models only accept 'en'; multilingual accepts any language code
-  const whisperLang = isEnModel ? 'en' : (effectiveLang === 'auto' ? undefined : resolveLanguage(effectiveLang)?.whisperCode || effectiveLang);
+  // Build whisper options: .en models only accept 'en'; multilingual accepts language codes
+  const whisperLang = isEnModel ? 'en' : (resolveLanguage(effectiveLang)?.whisperCode || effectiveLang);
 
   const id = randomUUID().slice(0, 8);
   const inputTmp = join(tmpdir(), `nerve-stt-in-${id}-${filename}`);

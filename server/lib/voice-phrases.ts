@@ -66,10 +66,19 @@ function readStore(): PhrasesStore {
     for (const [lang, val] of Object.entries(raw as Record<string, unknown>)) {
       if (typeof val === 'object' && val !== null) {
         const v = val as Record<string, unknown>;
-        store[lang] = {
+        const entry: LanguageVoicePhrases = {
           stopPhrases: Array.isArray(v.stopPhrases) ? v.stopPhrases as string[] : [],
           cancelPhrases: Array.isArray(v.cancelPhrases) ? v.cancelPhrases as string[] : [],
         };
+        if (Array.isArray(v.wakePhrases) && v.wakePhrases.length > 0) {
+          const primaryWake = (v.wakePhrases as string[])
+            .map((phrase) => phrase.trim())
+            .find((phrase) => phrase.length > 0);
+          if (primaryWake) {
+            entry.wakePhrases = [primaryWake];
+          }
+        }
+        store[lang] = entry;
       }
     }
     cached = store;
@@ -146,7 +155,12 @@ export function setLanguagePhrases(lang: string, phrases: LanguageVoicePhrases):
     cancelPhrases: phrases.cancelPhrases.filter(p => p.trim().length > 0),
   };
   if (phrases.wakePhrases?.length) {
-    entry.wakePhrases = phrases.wakePhrases.filter(p => p.trim().length > 0);
+    const primaryWake = phrases.wakePhrases
+      .map((phrase) => phrase.trim())
+      .find((phrase) => phrase.length > 0);
+    if (primaryWake) {
+      entry.wakePhrases = [primaryWake];
+    }
   }
   store[lang] = entry;
   writeStore(store);

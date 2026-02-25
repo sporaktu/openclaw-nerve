@@ -358,9 +358,12 @@ Transcribes audio using the configured STT provider.
 
 | Model | Size | Speed | Quality |
 |-------|------|-------|---------|
-| `tiny.en` (default) | 75 MB | Fastest | Good for clear speech |
-| `base.en` | 142 MB | Fast | Better accuracy |
-| `small.en` | 466 MB | Moderate | Best accuracy (CPU-intensive) |
+| `tiny` (default) | 75 MB | Fastest | Good baseline, multilingual |
+| `base` | 142 MB | Fast | Better conversational accuracy, multilingual |
+| `small` | 466 MB | Moderate | Best accuracy (CPU-intensive), multilingual |
+| `tiny.en` | 75 MB | Fastest | English-only variant |
+| `base.en` | 142 MB | Fast | English-only variant |
+| `small.en` | 466 MB | Moderate | English-only variant |
 
 Configure via `WHISPER_MODEL` env var. Models auto-download from HuggingFace on first use and are stored in `WHISPER_MODEL_DIR` (default `~/.nerve/models/`).
 

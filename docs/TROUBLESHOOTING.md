@@ -316,7 +316,7 @@ After approval, reconnect from the browser (refresh the page or click reconnect)
 **Fix (local STT):**
 - Models auto-download on first use. Check server logs for download progress or errors
 - Ensure `ffmpeg` is installed (the installer handles this): `ffmpeg -version`
-- Check model file exists: `ls ~/.nerve/models/ggml-tiny.en.bin`
+- Check model file exists: `ls ~/.nerve/models/ggml-tiny.bin`
 
 **Fix (OpenAI STT):**
 - Set `STT_PROVIDER=openai` and `OPENAI_API_KEY` in `.env`

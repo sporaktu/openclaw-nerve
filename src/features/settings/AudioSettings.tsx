@@ -6,6 +6,7 @@ import type { TTSProvider } from '@/features/tts/useTTS';
 import type { STTProvider } from '@/contexts/SettingsContext';
 import { useTTSConfig } from '@/features/tts/useTTSConfig';
 import { VoicePhrasesModal } from './VoicePhrasesModal';
+import { buildPrimaryWakePhrase } from '@/lib/constants';
 
 // ─── Language types ──────────────────────────────────────────────────────────
 
@@ -142,6 +143,8 @@ function ExpandableInput({
   );
 }
 
+type AudioSettingsSection = 'all' | 'input' | 'output';
+
 interface AudioSettingsProps {
   soundEnabled: boolean;
   onToggleSound: () => void;
@@ -156,6 +159,7 @@ interface AudioSettingsProps {
   wakeWordEnabled: boolean;
   onToggleWakeWord: () => void;
   agentName?: string;
+  section?: AudioSettingsSection;
 }
 
 /** STT model selector with download progress and GPU warning. */
@@ -260,11 +264,11 @@ function SttModelSelector({ model, onModelChange }: { model: string; onModelChan
       )}
 
       {/* No-GPU warning for heavier models */}
-      {hasGpu === false && model !== 'tiny.en' && (
+      {hasGpu === false && model !== 'tiny' && model !== 'tiny.en' && (
         <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
           <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
           <span className="text-[10px] text-orange/80">
-            No GPU detected — {model === 'small.en' ? 'small.en will be very slow on CPU' : 'base.en may be slow on CPU'}. Use tiny.en for faster results.
+            No GPU detected — {model.includes('small') ? `${model} will be very slow on CPU` : `${model} may be slow on CPU`}. Use tiny for faster multilingual transcription.
           </span>
         </div>
       )}
@@ -369,8 +373,12 @@ export function AudioSettings({
   wakeWordEnabled,
   onToggleWakeWord,
   agentName = 'Agent',
+  section = 'all',
 }: AudioSettingsProps) {
   const models = PROVIDER_MODELS[ttsProvider] || [];
+  const showInput = section === 'all' || section === 'input';
+  const showOutput = section === 'all' || section === 'output';
+  const headingLabel = section === 'input' ? 'AUDIO INPUT' : section === 'output' ? 'VOICE OUTPUT' : 'AUDIO';
   const { config, saved, updateField } = useTTSConfig();
   const { state: langState, support, isMultilingual, setLanguage, setGender } = useLanguage();
 
@@ -398,6 +406,7 @@ export function AudioSettings({
 
   // Track which languages have custom phrases
   const [phrasesStatus, setPhrasesStatus] = useState<Record<string, { configured: boolean }>>({});
+  const [activeWakePhrase, setActiveWakePhrase] = useState('');
   useEffect(() => {
     fetch('/api/voice-phrases/status')
       .then(r => r.json())
@@ -405,13 +414,36 @@ export function AudioSettings({
       .catch(() => {});
   }, [phrasesModal.open]); // Refetch after modal closes (might have saved)
 
+  useEffect(() => {
+    const lang = langState?.language;
+    if (!lang) return;
+
+    let cancelled = false;
+    fetch(`/api/voice-phrases?lang=${lang}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const customWake = Array.isArray(data?.wakePhrases)
+          ? data.wakePhrases.map((phrase: string) => phrase.trim()).find(Boolean) || ''
+          : '';
+        setActiveWakePhrase(customWake);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveWakePhrase('');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [langState?.language, phrasesModal.open]);
+
   // Wrap setLanguage to check for phrases configuration
   const handleLanguageChange = useCallback((code: string) => {
     setLanguage(code);
     // Notify InputBar that language changed
     window.dispatchEvent(new CustomEvent('nerve:language-changed'));
     // If switching to non-English and no custom phrases configured, show modal
-    if (code !== 'en' && code !== 'auto') {
+    if (code !== 'en') {
       const status = phrasesStatus[code];
       if (!status?.configured) {
         const lang = langState?.supported.find(l => l.code === code);
@@ -456,15 +488,21 @@ export function AudioSettings({
     ];
   }, [langState?.language, langState?.supported, support]);
 
+  const wakePhraseDisplay = useMemo(() => {
+    const phrase = buildPrimaryWakePhrase(agentName, langState?.language || 'en', activeWakePhrase ? [activeWakePhrase] : undefined);
+    if (!phrase) return `Hey ${agentName}`;
+    return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+  }, [activeWakePhrase, agentName, langState?.language]);
+
   return (
     <div className="space-y-4">
       <h3 className="text-[10px] font-bold tracking-[1.5px] uppercase text-muted-foreground flex items-center gap-2">
         <span className="text-green">◆</span>
-        AUDIO
+        {headingLabel}
       </h3>
 
       {/* Language Preference */}
-      {langState && (
+      {showInput && langState && (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
             <div className="flex items-center gap-3">
@@ -474,42 +512,44 @@ export function AudioSettings({
             <InlineSelect
               value={langState.language}
               onChange={handleLanguageChange}
-              options={[
-                { value: 'auto', label: 'Auto-detect' },
-                ...langState.supported.map((l) => ({
-                  value: l.code,
-                  label: `${l.name} — ${l.nativeName}`,
-                })),
-              ]}
+              options={langState.supported.map((l) => ({
+                value: l.code,
+                label: `${l.name} — ${l.nativeName}`,
+              }))}
               ariaLabel="Voice Language"
               menuClassName="min-w-[200px]"
             />
           </div>
 
           {/* Compatibility warnings */}
-          {langState.language !== 'auto' && langState.language !== 'en' && (
-            <>
-              {ttsProvider === 'replicate' && !langState.providers.qwen3 && (
-                <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
-                  <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
-                  <span className="text-[10px] text-orange/80">
-                    Qwen3 doesn't support {langState.supported.find((l) => l.code === langState.language)?.name || langState.language}. Voice output will use English.
-                  </span>
-                </div>
-              )}
-              {!isMultilingual && sttProvider === 'local' && (
-                <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
-                  <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
-                  <span className="text-[10px] text-orange/80">
-                    Current model is English-only. Switch to a multilingual model below for {langState.supported.find((l) => l.code === langState.language)?.name || langState.language} transcription.
-                  </span>
-                </div>
-              )}
-            </>
+          {langState.language !== 'en' && !isMultilingual && sttProvider === 'local' && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
+              <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
+              <span className="text-[10px] text-orange/80">
+                Current model is English-only. Switch to a multilingual model below for {langState.supported.find((l) => l.code === langState.language)?.name || langState.language} transcription.
+              </span>
+            </div>
+          )}
+
+          {langState.language !== 'en' && sttProvider === 'local' && sttModel === 'tiny' && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
+              <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
+              <div className="flex-1 flex items-start justify-between gap-2">
+                <span className="text-[10px] text-orange/80">
+                  Tiny is fast, but conversational {langState.supported.find((l) => l.code === langState.language)?.name || langState.language} can be less accurate. Use base for better results.
+                </span>
+                <button
+                  onClick={() => onSttModelChange('base')}
+                  className="px-2 py-1 text-[10px] font-mono uppercase tracking-wide border border-orange/50 text-orange hover:bg-orange/10 transition-colors shrink-0"
+                >
+                  Use base
+                </button>
+              </div>
+            </div>
           )}
 
           {/* Configure Voice Phrases button — always visible for non-English */}
-          {langState.language !== 'auto' && langState.language !== 'en' && (
+          {langState.language !== 'en' && (
             <button
               onClick={() => {
                 const lang = langState.supported.find(l => l.code === langState.language);
@@ -532,8 +572,83 @@ export function AudioSettings({
             </button>
           )}
 
-          {/* Edge TTS voice gender toggle */}
-          {ttsProvider === 'edge' && langState.language !== 'auto' && (
+        </div>
+      )}
+
+      {/* Sound Effects */}
+      {showOutput && (
+        <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
+          <div className="flex items-center gap-3">
+            {soundEnabled ? (
+              <Volume2 size={14} className="text-green" aria-hidden="true" />
+            ) : (
+              <VolumeX size={14} className="text-muted-foreground" aria-hidden="true" />
+            )}
+            <span className="text-[12px]" id="sound-label">Sound Effects</span>
+          </div>
+          <Switch
+            checked={soundEnabled}
+            onCheckedChange={onToggleSound}
+            aria-label="Toggle sound effects"
+          />
+        </div>
+      )}
+
+      {/* TTS Provider */}
+      {showOutput && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-[1px]">TTS Provider</span>
+          {langState && (
+            <div className="flex items-center justify-between px-3 py-2 bg-background border border-border/60">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-[1px]">Language</span>
+              <span className="text-[11px]">
+                {langState.supported.find((l) => l.code === langState.language)?.name || langState.language}
+              </span>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={() => onTtsProviderChange('openai')}
+              className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
+                ttsProvider === 'openai'
+                  ? 'bg-primary/20 border-primary text-primary'
+                  : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
+              }`}
+            >
+              OpenAI
+            </button>
+            <button
+              onClick={() => onTtsProviderChange('replicate')}
+              className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
+                ttsProvider === 'replicate'
+                  ? 'bg-orange/20 border-orange text-orange'
+                  : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
+              }`}
+            >
+              Replicate
+            </button>
+            <button
+              onClick={() => onTtsProviderChange('edge')}
+              className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
+                ttsProvider === 'edge'
+                  ? 'bg-green/20 border-green text-green'
+                  : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
+              }`}
+            >
+              Edge (Free)
+            </button>
+          </div>
+
+          {langState?.language && langState.language !== 'en' && ttsProvider === 'replicate' && !langState.providers.qwen3 && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
+              <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
+              <span className="text-[10px] text-orange/80">
+                Qwen3 doesn't support {langState.supported.find((l) => l.code === langState.language)?.name || langState.language}. Voice output will use English.
+              </span>
+            </div>
+          )}
+
+          {ttsProvider === 'edge' && langState && (
             <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
               <span className="text-[12px]">Voice Gender</span>
               <div className="flex gap-1.5">
@@ -563,70 +678,16 @@ export function AudioSettings({
         </div>
       )}
 
-      {/* Sound Effects */}
-      <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
-        <div className="flex items-center gap-3">
-          {soundEnabled ? (
-            <Volume2 size={14} className="text-green" aria-hidden="true" />
-          ) : (
-            <VolumeX size={14} className="text-muted-foreground" aria-hidden="true" />
-          )}
-          <span className="text-[12px]" id="sound-label">Sound Effects</span>
-        </div>
-        <Switch
-          checked={soundEnabled}
-          onCheckedChange={onToggleSound}
-          aria-label="Toggle sound effects"
-        />
-      </div>
-
-      {/* TTS Provider */}
-      <div className="flex flex-col gap-1.5">
-        <span className="text-[10px] text-muted-foreground uppercase tracking-[1px]">TTS Provider</span>
-        <div className="flex gap-2">
-          <button
-            onClick={() => onTtsProviderChange('openai')}
-            className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
-              ttsProvider === 'openai'
-                ? 'bg-primary/20 border-primary text-primary'
-                : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
-            }`}
-          >
-            OpenAI
-          </button>
-          <button
-            onClick={() => onTtsProviderChange('replicate')}
-            className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
-              ttsProvider === 'replicate'
-                ? 'bg-orange/20 border-orange text-orange'
-                : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
-            }`}
-          >
-            Replicate
-          </button>
-          <button
-            onClick={() => onTtsProviderChange('edge')}
-            className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
-              ttsProvider === 'edge'
-                ? 'bg-green/20 border-green text-green'
-                : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
-            }`}
-          >
-            Edge (Free)
-          </button>
-        </div>
-      </div>
-
       {/* TTS API key input */}
-      {ttsProvider === 'openai' && !apiKeys.openai && (
+      {showOutput && ttsProvider === 'openai' && !apiKeys.openai && (
         <ApiKeyInput keyName="OPENAI_API_KEY" provider="OpenAI TTS" fieldName="openaiKey" onSaved={() => setApiKeys(k => ({ ...k, openai: true }))} />
       )}
-      {ttsProvider === 'replicate' && !apiKeys.replicate && (
+      {showOutput && ttsProvider === 'replicate' && !apiKeys.replicate && (
         <ApiKeyInput keyName="REPLICATE_API_TOKEN" provider="Replicate TTS" fieldName="replicateToken" onSaved={() => setApiKeys(k => ({ ...k, replicate: true }))} />
       )}
 
       {/* TTS Model (shown when provider has multiple models) */}
-      {models.length > 0 && (
+      {showOutput && models.length > 0 && (
         <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
           <span className="text-[12px]">Model</span>
           <InlineSelect
@@ -640,7 +701,7 @@ export function AudioSettings({
       )}
 
       {/* Voice Config */}
-      {config && (
+      {showOutput && config && (
         <div className="space-y-2">
           {saved && (
             <span className="text-[10px] text-green font-mono animate-pulse">Saved ✓</span>
@@ -700,71 +761,77 @@ export function AudioSettings({
       )}
 
       {/* Wake Word */}
-      <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
-        <div className="flex items-center gap-3">
-          {wakeWordEnabled ? (
-            <Mic size={14} className="text-green" aria-hidden="true" />
-          ) : (
-            <MicOff size={14} className="text-muted-foreground" aria-hidden="true" />
-          )}
-          <div className="flex flex-col">
-            <span className="text-[12px]" id="wake-word-label">Wake Word</span>
-            <span className="text-[10px] text-muted-foreground">Say "Hey {agentName}" to activate</span>
+      {showInput && (
+        <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
+          <div className="flex items-center gap-3">
+            {wakeWordEnabled ? (
+              <Mic size={14} className="text-green" aria-hidden="true" />
+            ) : (
+              <MicOff size={14} className="text-muted-foreground" aria-hidden="true" />
+            )}
+            <div className="flex flex-col">
+              <span className="text-[12px]" id="wake-word-label">Wake Word</span>
+              <span className="text-[10px] text-muted-foreground">Say "{wakePhraseDisplay}" to activate</span>
+            </div>
           </div>
+          <Switch
+            checked={wakeWordEnabled}
+            onCheckedChange={onToggleWakeWord}
+            aria-label="Toggle wake word detection"
+          />
         </div>
-        <Switch
-          checked={wakeWordEnabled}
-          onCheckedChange={onToggleWakeWord}
-          aria-label="Toggle wake word detection"
-        />
-      </div>
+      )}
 
       {/* Speech-to-Text */}
-      <h3 className="text-[10px] font-bold tracking-[1.5px] uppercase text-muted-foreground flex items-center gap-2 mt-6">
-        <span className="text-green">◆</span>
-        SPEECH-TO-TEXT
-      </h3>
+      {showInput && (
+        <h3 className="text-[10px] font-bold tracking-[1.5px] uppercase text-muted-foreground flex items-center gap-2 mt-6">
+          <span className="text-green">◆</span>
+          SPEECH-TO-TEXT
+        </h3>
+      )}
 
-      <div className="flex flex-col gap-1.5">
-        <span className="text-[10px] text-muted-foreground uppercase tracking-[1px]">STT Provider</span>
-        <div className="flex gap-2">
-          <button
-            onClick={() => onSttProviderChange('local')}
-            className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
-              sttProvider === 'local'
-                ? 'bg-green/20 border-green text-green'
-                : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
-            }`}
-          >
-            Local (Free)
-          </button>
-          <button
-            onClick={() => onSttProviderChange('openai')}
-            className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
-              sttProvider === 'openai'
-                ? 'bg-primary/20 border-primary text-primary'
-                : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
-            }`}
-          >
-            OpenAI
-          </button>
+      {showInput && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-[1px]">STT Provider</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onSttProviderChange('local')}
+              className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
+                sttProvider === 'local'
+                  ? 'bg-green/20 border-green text-green'
+                  : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
+              }`}
+            >
+              Local (Free)
+            </button>
+            <button
+              onClick={() => onSttProviderChange('openai')}
+              className={`flex-1 px-3 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
+                sttProvider === 'openai'
+                  ? 'bg-primary/20 border-primary text-primary'
+                  : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
+              }`}
+            >
+              OpenAI
+            </button>
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {sttProvider === 'local'
+              ? 'Using built-in Whisper model — no API key needed'
+              : apiKeys.openai
+                ? 'Using OpenAI Whisper API'
+                : 'OpenAI Whisper API — enter your API key below'}
+          </span>
         </div>
-        <span className="text-[10px] text-muted-foreground">
-          {sttProvider === 'local'
-            ? 'Using built-in Whisper model — no API key needed'
-            : apiKeys.openai
-              ? 'Using OpenAI Whisper API'
-              : 'OpenAI Whisper API — enter your API key below'}
-        </span>
-      </div>
+      )}
 
       {/* STT API key input */}
-      {sttProvider === 'openai' && !apiKeys.openai && (
+      {showInput && sttProvider === 'openai' && !apiKeys.openai && (
         <ApiKeyInput keyName="OPENAI_API_KEY" provider="OpenAI Whisper" fieldName="openaiKey" onSaved={() => setApiKeys(k => ({ ...k, openai: true }))} />
       )}
 
       {/* STT Model selector (only for local provider) */}
-      {sttProvider === 'local' && (
+      {showInput && sttProvider === 'local' && (
         <SttModelSelector model={sttModel} onModelChange={onSttModelChange} />
       )}
 

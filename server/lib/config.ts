@@ -13,12 +13,32 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_GATEWAY_URL, DEFAULT_PORT, DEFAULT_SSL_PORT, DEFAULT_HOST, WHISPER_MODEL_FILES, WHISPER_DEFAULT_MODEL, DEFAULT_LANGUAGE } from './constants.js';
+import {
+  DEFAULT_GATEWAY_URL,
+  DEFAULT_PORT,
+  DEFAULT_SSL_PORT,
+  DEFAULT_HOST,
+  WHISPER_MODEL_FILES,
+  WHISPER_DEFAULT_MODEL,
+  DEFAULT_LANGUAGE,
+  SUPPORTED_LANGUAGES,
+} from './constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
 const HOME = process.env.HOME || os.homedir();
+const SUPPORTED_LANGUAGE_CODES = new Set(SUPPORTED_LANGUAGES.map((l) => l.code));
+
+function normalizeLanguagePreference(language: string | undefined): string {
+  const normalized = (language || DEFAULT_LANGUAGE).trim().toLowerCase();
+  if (!normalized || normalized === 'auto') return DEFAULT_LANGUAGE;
+
+  const code = normalized.split('-')[0] || DEFAULT_LANGUAGE;
+  if (!SUPPORTED_LANGUAGE_CODES.has(code)) return DEFAULT_LANGUAGE;
+
+  return code;
+}
 
 export const config = {
   port: Number(process.env.PORT || DEFAULT_PORT),
@@ -35,8 +55,8 @@ export const config = {
   whisperModel: process.env.WHISPER_MODEL || WHISPER_DEFAULT_MODEL,
   whisperModelDir: process.env.WHISPER_MODEL_DIR || path.join(HOME, '.nerve', 'models'),
 
-  // Language preference (ISO 639-1 code or 'auto' for whisper auto-detect)
-  language: process.env.LANGUAGE || DEFAULT_LANGUAGE,
+  // Language preference (ISO 639-1). Invalid/auto values are normalized to English.
+  language: normalizeLanguagePreference(process.env.LANGUAGE),
   edgeVoiceGender: (process.env.EDGE_VOICE_GENDER || 'female') as 'female' | 'male',
 
   // Gateway connection

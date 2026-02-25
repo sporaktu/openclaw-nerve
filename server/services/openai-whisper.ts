@@ -23,8 +23,7 @@ export interface WhisperError {
 /**
  * Transcribe audio via OpenAI Whisper API.
  * Accepts raw file data and builds a multipart request.
- * When a language hint is provided (and not 'auto'), it's passed to the API
- * for better accuracy. Otherwise, Whisper auto-detects the language.
+ * When a language hint is provided, it's passed to the API for better accuracy.
  */
 export async function transcribe(
   fileData: Buffer,
@@ -49,7 +48,7 @@ export async function transcribe(
 
   // Optional language hint (ISO 639-1) — improves accuracy when known
   const effectiveLang = language || config.language;
-  if (effectiveLang && effectiveLang !== 'auto') {
+  if (effectiveLang) {
     footer += `--${boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n${effectiveLang}\r\n`;
   }
 

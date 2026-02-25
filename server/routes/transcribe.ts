@@ -10,8 +10,8 @@ import { Hono } from 'hono';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../lib/config.js';
-import { SUPPORTED_LANGUAGES, WHISPER_MODEL_FILES } from '../lib/constants.js';
-import { isLanguageSupported, resolveLanguage } from '../lib/language.js';
+import { SUPPORTED_LANGUAGES } from '../lib/constants.js';
+import { isLanguageSupported } from '../lib/language.js';
 import { transcribe as transcribeOpenAI } from '../services/openai-whisper.js';
 import { transcribeLocal, isModelAvailable, getActiveModel, setWhisperModel, getDownloadProgress, getSystemInfo } from '../services/whisper-local.js';
 import { rateLimitTranscribe, rateLimitGeneral } from '../middleware/rate-limit.js';
@@ -161,8 +161,8 @@ app.put('/api/transcribe/config', async (c) => {
     // Switch language
     if (body.language !== undefined) {
       const lang = body.language;
-      if (lang !== 'auto' && !SUPPORTED_LANGUAGES.find((l) => l.code === lang)) {
-        return c.text(`Unsupported language: ${lang}. Available: auto, ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
+      if (!SUPPORTED_LANGUAGES.find((l) => l.code === lang)) {
+        return c.text(`Unsupported language: ${lang}. Available: ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
       }
       (config as Record<string, unknown>).language = lang;
       writeEnvKey('LANGUAGE', lang);
@@ -207,8 +207,8 @@ app.put('/api/language', rateLimitGeneral, async (c) => {
 
     if (body.language !== undefined) {
       const lang = body.language;
-      if (lang !== 'auto' && !SUPPORTED_LANGUAGES.find((l) => l.code === lang)) {
-        return c.text(`Unsupported language: ${lang}. Available: auto, ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
+      if (!SUPPORTED_LANGUAGES.find((l) => l.code === lang)) {
+        return c.text(`Unsupported language: ${lang}. Available: ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
       }
       (config as Record<string, unknown>).language = lang;
       writeEnvKey('LANGUAGE', lang);

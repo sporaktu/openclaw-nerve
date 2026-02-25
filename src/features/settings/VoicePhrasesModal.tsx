@@ -90,36 +90,32 @@ export function VoicePhrasesModal({
   languageName,
   languageNativeName,
 }: VoicePhrasesModalProps) {
-  const [wakePhrases, setWakePhrases] = useState<string[]>([]);
+  const [wakePhrase, setWakePhrase] = useState('');
   const [stopPhrases, setStopPhrases] = useState<string[]>([]);
   const [cancelPhrases, setCancelPhrases] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
 
   // Load defaults/existing phrases when modal opens
   useEffect(() => {
     if (!open || !languageCode) return;
-    setLoaded(false);
     fetch(`/api/voice-phrases/${languageCode}`)
       .then(r => r.json())
       .then((data: PhrasesData) => {
-        setWakePhrases(data.wakePhrases?.length ? data.wakePhrases : ['']);
+        setWakePhrase(data.wakePhrases?.find((phrase) => phrase.trim().length > 0) || '');
         setStopPhrases(data.stopPhrases.length > 0 ? data.stopPhrases : ['']);
         setCancelPhrases(data.cancelPhrases.length > 0 ? data.cancelPhrases : ['']);
-        setLoaded(true);
       })
       .catch(() => {
-        setWakePhrases(['']);
+        setWakePhrase('');
         setStopPhrases(['']);
         setCancelPhrases(['']);
-        setLoaded(true);
       });
   }, [open, languageCode]);
 
   const updatePhrase = useCallback(
-    (type: 'wake' | 'stop' | 'cancel', index: number, value: string) => {
-      const setter = type === 'wake' ? setWakePhrases : type === 'stop' ? setStopPhrases : setCancelPhrases;
-      setter(prev => {
+    (type: 'stop' | 'cancel', index: number, value: string) => {
+      const setter = type === 'stop' ? setStopPhrases : setCancelPhrases;
+      setter((prev) => {
         const next = [...prev];
         next[index] = value;
         return next;
@@ -128,14 +124,14 @@ export function VoicePhrasesModal({
     [],
   );
 
-  const addPhrase = useCallback((type: 'wake' | 'stop' | 'cancel') => {
-    const setter = type === 'wake' ? setWakePhrases : type === 'stop' ? setStopPhrases : setCancelPhrases;
-    setter(prev => [...prev, '']);
+  const addPhrase = useCallback((type: 'stop' | 'cancel') => {
+    const setter = type === 'stop' ? setStopPhrases : setCancelPhrases;
+    setter((prev) => [...prev, '']);
   }, []);
 
-  const removePhrase = useCallback((type: 'wake' | 'stop' | 'cancel', index: number) => {
-    const setter = type === 'wake' ? setWakePhrases : type === 'stop' ? setStopPhrases : setCancelPhrases;
-    setter(prev => prev.filter((_, i) => i !== index));
+  const removePhrase = useCallback((type: 'stop' | 'cancel', index: number) => {
+    const setter = type === 'stop' ? setStopPhrases : setCancelPhrases;
+    setter((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -145,9 +141,9 @@ export function VoicePhrasesModal({
         stopPhrases: stopPhrases.filter(p => p.trim()),
         cancelPhrases: cancelPhrases.filter(p => p.trim()),
       };
-      const filteredWake = wakePhrases.filter(p => p.trim());
-      if (filteredWake.length > 0) {
-        body.wakePhrases = filteredWake;
+      const wake = wakePhrase.trim();
+      if (wake.length > 0) {
+        body.wakePhrases = [wake];
       }
       const resp = await fetch(`/api/voice-phrases/${languageCode}`, {
         method: 'PUT',
@@ -157,7 +153,7 @@ export function VoicePhrasesModal({
       if (resp.ok) onClose();
     } catch { /* ignore */ }
     setSaving(false);
-  }, [languageCode, wakePhrases, stopPhrases, cancelPhrases, onClose]);
+  }, [languageCode, wakePhrase, stopPhrases, cancelPhrases, onClose]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -173,25 +169,25 @@ export function VoicePhrasesModal({
           </DialogDescription>
         </DialogHeader>
 
-        {loaded && (
-          <div className="space-y-5 max-h-[55vh] overflow-y-auto pr-1">
-            {/* Wake Phrases */}
+        <div className="space-y-5 max-h-[55vh] overflow-y-auto pr-1">
+            {/* Wake Phrase */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Mic size={12} className="text-blue-400" />
                 <label className="text-[11px] font-semibold tracking-wide uppercase text-blue-400">
-                  Wake Phrases
+                  Wake Phrase
                 </label>
               </div>
               <span className="text-[10px] text-muted-foreground block">
-                Say any of these to start listening (e.g. "Hey Kim" in your language). Leave empty to keep English wake word.
+                One wake phrase per language. Leave empty to use the default phrase for this language.
               </span>
-              <PhraseList
-                phrases={wakePhrases}
-                onChange={(i, v) => updatePhrase('wake', i, v)}
-                onAdd={() => addPhrase('wake')}
-                onRemove={(i) => removePhrase('wake', i)}
+              <input
+                type="text"
+                value={wakePhrase}
+                onChange={(e) => setWakePhrase(e.target.value)}
+                className="w-full px-3 py-1.5 text-[12px] bg-background border border-border/60 focus:border-primary outline-none transition-colors rounded-sm"
                 placeholder="Wake phrase"
+                dir="auto"
               />
             </div>
 
@@ -235,7 +231,6 @@ export function VoicePhrasesModal({
               />
             </div>
           </div>
-        )}
 
         <DialogFooter className="gap-2 sm:gap-0">
           <button

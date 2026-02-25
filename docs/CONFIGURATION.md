@@ -139,13 +139,13 @@ TTS provider fallback chain (when no explicit provider is requested):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `STT_PROVIDER` | `local` | STT provider: `local` (whisper.cpp, no API key needed) or `openai` (requires `OPENAI_API_KEY`) |
-| `WHISPER_MODEL` | `tiny.en` | Local whisper model: `tiny.en` (75 MB), `base.en` (142 MB), or `small.en` (466 MB) |
+| `WHISPER_MODEL` | `tiny` | Local whisper model: `tiny` (75 MB), `base` (142 MB), or `small` (466 MB) — multilingual variants. English-only variants (`tiny.en`, `base.en`, `small.en`) are also available. |
 | `WHISPER_MODEL_DIR` | `~/.nerve/models/` | Directory for downloaded whisper model files |
 
 ```env
 # Use local speech-to-text (no API key needed)
 STT_PROVIDER=local
-WHISPER_MODEL=tiny.en
+WHISPER_MODEL=tiny
 ```
 
 Local STT requires `ffmpeg` for audio format conversion (webm/ogg → 16kHz mono WAV). The installer handles this automatically. Models are downloaded from HuggingFace on first use.
