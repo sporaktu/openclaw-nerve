@@ -437,25 +437,12 @@ export function AudioSettings({
     };
   }, [langState?.language, phrasesModal.open]);
 
-  // Wrap setLanguage to check for phrases configuration
+  // Keep language switches lightweight; phrase editing is explicit via the CTA button.
   const handleLanguageChange = useCallback((code: string) => {
     setLanguage(code);
     // Notify InputBar that language changed
     window.dispatchEvent(new CustomEvent('nerve:language-changed'));
-    // If switching to non-English and no custom phrases configured, show modal
-    if (code !== 'en') {
-      const status = phrasesStatus[code];
-      if (!status?.configured) {
-        const lang = langState?.supported.find(l => l.code === code);
-        setPhrasesModal({
-          open: true,
-          code,
-          name: lang?.name || code,
-          nativeName: lang?.nativeName || code,
-        });
-      }
-    }
-  }, [setLanguage, phrasesStatus, langState?.supported]);
+  }, [setLanguage]);
 
   const OPENAI_VOICES = [
     { value: 'alloy', label: 'Alloy' },
@@ -550,26 +537,33 @@ export function AudioSettings({
 
           {/* Configure Voice Phrases button — always visible for non-English */}
           {langState.language !== 'en' && (
-            <button
-              onClick={() => {
-                const lang = langState.supported.find(l => l.code === langState.language);
-                setPhrasesModal({
-                  open: true,
-                  code: langState.language,
-                  name: lang?.name || langState.language,
-                  nativeName: lang?.nativeName || langState.language,
-                });
-              }}
-              className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-primary transition-colors group"
-            >
-              <div className="flex items-center gap-3">
-                <Mic size={14} className="text-primary" aria-hidden="true" />
-                <span className="text-[12px]">Voice Phrases</span>
-              </div>
-              <span className="text-[10px] text-muted-foreground group-hover:text-primary transition-colors">
-                {phrasesStatus[langState.language]?.configured ? 'Edit ›' : 'Configure ›'}
-              </span>
-            </button>
+            <div className="space-y-1">
+              <button
+                onClick={() => {
+                  const lang = langState.supported.find(l => l.code === langState.language);
+                  setPhrasesModal({
+                    open: true,
+                    code: langState.language,
+                    name: lang?.name || langState.language,
+                    nativeName: lang?.nativeName || langState.language,
+                  });
+                }}
+                className="w-full flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-primary transition-colors group"
+              >
+                <div className="flex items-center gap-3">
+                  <Mic size={14} className="text-primary" aria-hidden="true" />
+                  <span className="text-[12px]">Voice Phrases</span>
+                </div>
+                <span className="text-[10px] text-muted-foreground group-hover:text-primary transition-colors">
+                  {phrasesStatus[langState.language]?.configured ? 'Edit ›' : 'Configure ›'}
+                </span>
+              </button>
+              {!phrasesStatus[langState.language]?.configured && (
+                <span className="text-[10px] text-muted-foreground/80 px-1">
+                  Optional: add local stop/cancel words for {langState.supported.find((l) => l.code === langState.language)?.name || langState.language}.
+                </span>
+              )}
+            </div>
           )}
 
         </div>
@@ -598,14 +592,6 @@ export function AudioSettings({
       {showOutput && (
         <div className="flex flex-col gap-1.5">
           <span className="text-[10px] text-muted-foreground uppercase tracking-[1px]">TTS Provider</span>
-          {langState && (
-            <div className="flex items-center justify-between px-3 py-2 bg-background border border-border/60">
-              <span className="text-[10px] text-muted-foreground uppercase tracking-[1px]">Language</span>
-              <span className="text-[11px]">
-                {langState.supported.find((l) => l.code === langState.language)?.name || langState.language}
-              </span>
-            </div>
-          )}
           <div className="flex gap-2">
             <button
               onClick={() => onTtsProviderChange('openai')}

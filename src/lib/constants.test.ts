@@ -125,6 +125,17 @@ describe('Voice Control Phrases', () => {
       expect(regex.test('this is a test')).toBe(false);
     });
 
+    it('should avoid Latin false positives inside larger words', () => {
+      const regex = buildStopPhrasesRegex('Kim', {
+        stopPhrases: ['done'],
+        cancelPhrases: [],
+        wakePhrases: [],
+      });
+
+      expect('undone'.replace(regex, '').trim()).toBe('undone');
+      expect('all done'.replace(regex, '').trim()).toBe('all');
+    });
+
     it('should handle empty agent name gracefully', () => {
       const regex = buildStopPhrasesRegex('');
       expect(regex.test('hey agent')).toBe(true);

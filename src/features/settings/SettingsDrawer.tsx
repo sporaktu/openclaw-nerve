@@ -153,12 +153,12 @@ export function SettingsDrawer({
       />
 
       {/* Drawer */}
-      <div 
+      <div
         ref={drawerRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="fixed right-0 top-0 h-full w-[640px] max-w-[96vw] bg-card border-l border-border z-50 overflow-hidden flex flex-col animate-slide-in-right"
+        className="fixed right-0 top-0 h-full w-full sm:w-[640px] sm:max-w-[96vw] bg-card border-l border-border z-50 overflow-hidden flex flex-col animate-slide-in-right"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
@@ -181,26 +181,32 @@ export function SettingsDrawer({
 
         {/* Content */}
         <div className="flex-1 overflow-hidden">
-          <div className="h-full grid grid-cols-[160px_1fr]">
-            <aside className="border-r border-border/50 bg-background/30 p-2 space-y-1">
-              {SETTINGS_CATEGORIES.map((category) => {
-                const Icon = category.icon;
-                const isActive = currentCategory === category.key;
-                return (
-                  <button
-                    key={category.key}
-                    onClick={() => setActiveCategory(category.key)}
-                    className={`w-full flex items-center gap-2 px-2.5 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
-                      isActive
-                        ? 'bg-primary/20 border-primary text-primary'
-                        : 'bg-card border-border/60 text-muted-foreground hover:border-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <Icon size={12} aria-hidden="true" />
-                    <span>{category.label}</span>
-                  </button>
-                );
-              })}
+          <div className="h-full grid grid-rows-[auto_1fr] sm:grid-rows-1 sm:grid-cols-[160px_1fr]">
+            <aside className="border-b sm:border-b-0 sm:border-r border-border/50 bg-background/30 p-2">
+              <div className="flex sm:flex-col gap-1 overflow-x-auto sm:overflow-visible" role="tablist" aria-label="Settings categories">
+                {SETTINGS_CATEGORIES.map((category) => {
+                  const Icon = category.icon;
+                  const isActive = currentCategory === category.key;
+                  const disabled = !isConnected && category.key !== 'advanced';
+                  return (
+                    <button
+                      key={category.key}
+                      role="tab"
+                      aria-selected={isActive}
+                      disabled={disabled}
+                      onClick={() => setActiveCategory(category.key)}
+                      className={`min-w-[110px] sm:min-w-0 w-full flex items-center gap-2 px-2.5 py-2 text-[11px] font-mono uppercase tracking-wide border transition-colors ${
+                        isActive
+                          ? 'bg-primary/20 border-primary text-primary'
+                          : 'bg-card border-border/60 text-muted-foreground hover:border-muted-foreground hover:text-foreground'
+                      } ${disabled ? 'opacity-50 cursor-not-allowed hover:border-border/60 hover:text-muted-foreground' : ''}`}
+                    >
+                      <Icon size={12} aria-hidden="true" />
+                      <span>{category.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </aside>
 
             <div className="overflow-y-auto p-4">

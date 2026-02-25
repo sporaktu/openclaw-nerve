@@ -1,7 +1,8 @@
 /**
- * Voice phrase configuration — per-language stop/cancel phrases.
+ * Voice phrase configuration — per-language stop/cancel/wake phrases.
  *
- * Config file: <PROJECT_ROOT>/voice-phrases.json
+ * Primary runtime config file: ~/.nerve/voice-phrases.json
+ * Legacy fallback (read-only): <PROJECT_ROOT>/voice-phrases.json
  *
  * Format (v2 — per-language):
  * {
@@ -9,24 +10,27 @@
  *   "fr": { "stopPhrases": [...], "cancelPhrases": [...] }
  * }
  *
- * Legacy flat format (v1) is auto-migrated on first read:
+ * Legacy flat format (v1):
  * { "stopPhrases": [...], "cancelPhrases": [...] }
- *   → becomes the "en" entry.
+ *   → interpreted as the "en" entry.
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_VOICE_PHRASES, type LanguageVoicePhrases } from './constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
-const CONFIG_PATH = path.join(PROJECT_ROOT, 'voice-phrases.json');
+const LEGACY_CONFIG_PATH = path.join(PROJECT_ROOT, 'voice-phrases.json');
+const CONFIG_PATH = process.env.NERVE_VOICE_PHRASES_PATH || path.join(process.env.HOME || os.homedir(), '.nerve', 'voice-phrases.json');
 
 type PhrasesStore = Record<string, LanguageVoicePhrases>;
 
 let cached: PhrasesStore | null = null;
 let cachedMtime = 0;
+let cachedPath = '';
 
 /** Check if object is legacy v1 flat format (has stopPhrases at top level). */
 function isLegacyFormat(raw: unknown): raw is LanguageVoicePhrases {
@@ -38,62 +42,79 @@ function isLegacyFormat(raw: unknown): raw is LanguageVoicePhrases {
   );
 }
 
+function resolveReadPath(): string | null {
+  if (fs.existsSync(CONFIG_PATH)) return CONFIG_PATH;
+  if (fs.existsSync(LEGACY_CONFIG_PATH)) return LEGACY_CONFIG_PATH;
+  return null;
+}
+
+function parseStore(raw: unknown): PhrasesStore {
+  // Legacy flat format (v1) — interpret as English-only.
+  if (isLegacyFormat(raw)) {
+    return {
+      en: {
+        stopPhrases: raw.stopPhrases,
+        cancelPhrases: Array.isArray(raw.cancelPhrases) ? raw.cancelPhrases : DEFAULT_VOICE_PHRASES.en.cancelPhrases,
+      },
+    };
+  }
+
+  // v2 format — validate entries
+  if (!raw || typeof raw !== 'object') return {};
+
+  const store: PhrasesStore = {};
+  for (const [lang, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof val !== 'object' || val === null) continue;
+
+    const v = val as Record<string, unknown>;
+    const entry: LanguageVoicePhrases = {
+      stopPhrases: Array.isArray(v.stopPhrases) ? v.stopPhrases as string[] : [],
+      cancelPhrases: Array.isArray(v.cancelPhrases) ? v.cancelPhrases as string[] : [],
+    };
+
+    if (Array.isArray(v.wakePhrases) && v.wakePhrases.length > 0) {
+      const primaryWake = (v.wakePhrases as string[])
+        .map((phrase) => phrase.trim())
+        .find((phrase) => phrase.length > 0);
+      if (primaryWake) {
+        entry.wakePhrases = [primaryWake];
+      }
+    }
+
+    store[lang] = entry;
+  }
+
+  return store;
+}
+
 /** Read the full per-language phrases store. */
 function readStore(): PhrasesStore {
   try {
-    const stat = fs.statSync(CONFIG_PATH);
-    if (cached && stat.mtimeMs === cachedMtime) return cached;
+    const readPath = resolveReadPath();
+    if (!readPath) return {};
 
-    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    const stat = fs.statSync(readPath);
+    if (cached && readPath === cachedPath && stat.mtimeMs === cachedMtime) return cached;
 
-    // Migrate legacy flat format → per-language
-    if (isLegacyFormat(raw)) {
-      const migrated: PhrasesStore = {
-        en: {
-          stopPhrases: raw.stopPhrases,
-          cancelPhrases: Array.isArray(raw.cancelPhrases) ? raw.cancelPhrases : DEFAULT_VOICE_PHRASES.en.cancelPhrases,
-        },
-      };
-      // Write migrated format back
-      fs.writeFileSync(CONFIG_PATH, JSON.stringify(migrated, null, 2), 'utf-8');
-      cached = migrated;
-      cachedMtime = fs.statSync(CONFIG_PATH).mtimeMs;
-      return cached;
-    }
+    const raw = JSON.parse(fs.readFileSync(readPath, 'utf-8'));
+    const store = parseStore(raw);
 
-    // v2 format — validate entries
-    const store: PhrasesStore = {};
-    for (const [lang, val] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof val === 'object' && val !== null) {
-        const v = val as Record<string, unknown>;
-        const entry: LanguageVoicePhrases = {
-          stopPhrases: Array.isArray(v.stopPhrases) ? v.stopPhrases as string[] : [],
-          cancelPhrases: Array.isArray(v.cancelPhrases) ? v.cancelPhrases as string[] : [],
-        };
-        if (Array.isArray(v.wakePhrases) && v.wakePhrases.length > 0) {
-          const primaryWake = (v.wakePhrases as string[])
-            .map((phrase) => phrase.trim())
-            .find((phrase) => phrase.length > 0);
-          if (primaryWake) {
-            entry.wakePhrases = [primaryWake];
-          }
-        }
-        store[lang] = entry;
-      }
-    }
     cached = store;
+    cachedPath = readPath;
     cachedMtime = stat.mtimeMs;
-    return cached;
+    return store;
   } catch {
     // File missing or invalid — return empty (defaults come from constants)
     return {};
   }
 }
 
-/** Write the full store to disk and invalidate cache. */
+/** Write the full store to disk and refresh cache. */
 function writeStore(store: PhrasesStore): void {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(store, null, 2), 'utf-8');
+  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(store, null, 2)}\n`, 'utf-8');
   cached = store;
+  cachedPath = CONFIG_PATH;
   cachedMtime = fs.statSync(CONFIG_PATH).mtimeMs;
 }
 

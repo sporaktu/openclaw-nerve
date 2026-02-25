@@ -7,45 +7,13 @@
  */
 
 import { Hono } from 'hono';
-import fs from 'node:fs';
-import path from 'node:path';
 import { config } from '../lib/config.js';
 import { SUPPORTED_LANGUAGES } from '../lib/constants.js';
+import { writeEnvKey } from '../lib/env-file.js';
 import { isLanguageSupported } from '../lib/language.js';
 import { transcribe as transcribeOpenAI } from '../services/openai-whisper.js';
 import { transcribeLocal, isModelAvailable, getActiveModel, setWhisperModel, getDownloadProgress, getSystemInfo } from '../services/whisper-local.js';
 import { rateLimitTranscribe, rateLimitGeneral } from '../middleware/rate-limit.js';
-
-/** Path to the .env file in the project root. */
-const ENV_PATH = path.resolve(process.cwd(), '.env');
-
-/** Write key=value pairs back to .env, preserving comments and order. */
-function writeEnvKey(key: string, value: string): void {
-  let lines: string[] = [];
-  try {
-    lines = fs.readFileSync(ENV_PATH, 'utf8').split('\n');
-  } catch { /* file doesn't exist yet */ }
-
-  let found = false;
-  const updated = lines.map((line) => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('#') || !trimmed) return line;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx < 0) return line;
-    const lineKey = trimmed.slice(0, eqIdx).trim();
-    if (lineKey === key) {
-      found = true;
-      return `${key}=${value}`;
-    }
-    return line;
-  });
-
-  if (!found) {
-    updated.push(`${key}=${value}`);
-  }
-
-  fs.writeFileSync(ENV_PATH, updated.join('\n'));
-}
 
 const MAX_FILE_SIZE = config.limits.transcribe; // 12 MB
 
@@ -165,7 +133,7 @@ app.put('/api/transcribe/config', async (c) => {
         return c.text(`Unsupported language: ${lang}. Available: ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
       }
       (config as Record<string, unknown>).language = lang;
-      writeEnvKey('LANGUAGE', lang);
+      await writeEnvKey('NERVE_LANGUAGE', lang);
       messages.push(`Language set to ${lang}`);
     }
 
@@ -211,7 +179,7 @@ app.put('/api/language', rateLimitGeneral, async (c) => {
         return c.text(`Unsupported language: ${lang}. Available: ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
       }
       (config as Record<string, unknown>).language = lang;
-      writeEnvKey('LANGUAGE', lang);
+      await writeEnvKey('NERVE_LANGUAGE', lang);
     }
 
     if (body.edgeVoiceGender !== undefined) {
@@ -220,7 +188,7 @@ app.put('/api/language', rateLimitGeneral, async (c) => {
         return c.text('edgeVoiceGender must be "female" or "male"', 400);
       }
       (config as Record<string, unknown>).edgeVoiceGender = gender;
-      writeEnvKey('EDGE_VOICE_GENDER', gender);
+      await writeEnvKey('EDGE_VOICE_GENDER', gender);
     }
 
     return c.json({

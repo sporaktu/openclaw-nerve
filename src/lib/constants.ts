@@ -119,9 +119,8 @@ export const DEFAULT_WAKE_PHRASES = buildWakePhrases('agent');
 export const WAKE_PHRASES = DEFAULT_WAKE_PHRASES;
 
 /**
- * Stop/cancel phrases moved to voice-phrases.json (server config).
- * Served to client via GET /api/voice-phrases.
- * Constants below kept only for test compatibility.
+ * Stop/cancel phrases are server-managed runtime config and served via
+ * GET /api/voice-phrases. Constants below are kept for test compatibility.
  */
 export const STOP_PHRASES = ["boom", "i'm done", 'im done', "all right i'm done", "alright i'm done", "that's it", 'thats it', 'send it', 'done'];
 export const CANCEL_PHRASES = ['cancel', 'never mind', 'nevermind'];
@@ -152,13 +151,22 @@ export function buildStopPhrasesRegex(
   const allPhrases = [...stopPhrases, ...cancelPhrases, ...wakePhrases]
     .map((p) => p.trim())
     .filter(Boolean)
-    .sort((a, b) => b.length - a.length)
-    .map((p) => escapeRegex(p));
+    .sort((a, b) => b.length - a.length);
 
   // Fallback regex that never matches if phrase arrays are unexpectedly empty.
   if (allPhrases.length === 0) return /$^/u;
 
-  return new RegExp(`(?:${allPhrases.join('|')})\\s*[.!?,،؟。！？।…]*\\s*$`, 'iu');
+  // Latin-script phrases get a leading boundary guard so short words like "done"
+  // don't over-match inside larger words (e.g. "undone").
+  const phrasePatterns = allPhrases.map((phrase) => {
+    const escaped = escapeRegex(phrase);
+    if (/[A-Za-z]/.test(phrase)) {
+      return `(?:^|[^\\p{L}\\p{N}])${escaped}`;
+    }
+    return escaped;
+  });
+
+  return new RegExp(`(?:${phrasePatterns.join('|')})\\s*[.!?,،؟。！？।…]*\\s*$`, 'iu');
 }
 
 /**

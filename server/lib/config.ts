@@ -30,6 +30,8 @@ const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const HOME = process.env.HOME || os.homedir();
 const SUPPORTED_LANGUAGE_CODES = new Set(SUPPORTED_LANGUAGES.map((l) => l.code));
 
+const LANGUAGE_ENV_VALUE = process.env.NERVE_LANGUAGE ?? process.env.LANGUAGE;
+
 function normalizeLanguagePreference(language: string | undefined): string {
   const normalized = (language || DEFAULT_LANGUAGE).trim().toLowerCase();
   if (!normalized || normalized === 'auto') return DEFAULT_LANGUAGE;
@@ -56,7 +58,8 @@ export const config = {
   whisperModelDir: process.env.WHISPER_MODEL_DIR || path.join(HOME, '.nerve', 'models'),
 
   // Language preference (ISO 639-1). Invalid/auto values are normalized to English.
-  language: normalizeLanguagePreference(process.env.LANGUAGE),
+  // Primary env key: NERVE_LANGUAGE. Legacy LANGUAGE is still accepted as fallback.
+  language: normalizeLanguagePreference(LANGUAGE_ENV_VALUE),
   edgeVoiceGender: (process.env.EDGE_VOICE_GENDER || 'female') as 'female' | 'male',
 
   // Gateway connection
@@ -190,6 +193,9 @@ export function validateConfig(): void {
   }
   if (!config.replicateApiToken) {
     console.warn('[config] ⚠ REPLICATE_API_TOKEN not set — Qwen TTS unavailable');
+  }
+  if (!process.env.NERVE_LANGUAGE && process.env.LANGUAGE) {
+    console.warn('[config] ⚠ LANGUAGE is deprecated — use NERVE_LANGUAGE instead');
   }
   if (config.host === '0.0.0.0' && config.auth) {
     // Only warn about network binding when auth IS enabled (the loud warning above covers the no-auth case)
