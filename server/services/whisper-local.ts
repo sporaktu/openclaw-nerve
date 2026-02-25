@@ -15,6 +15,7 @@ import { initWhisper } from '@fugood/whisper.node';
 import type { WhisperContext } from '@fugood/whisper.node';
 import { config } from '../lib/config.js';
 import { WHISPER_MODEL_FILES, WHISPER_MODELS_BASE_URL } from '../lib/constants.js';
+import { resolveLanguage } from '../lib/language.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -296,6 +297,7 @@ function convertToWav(inputPath: string, outputPath: string): void {
 export async function transcribeLocal(
   fileData: Buffer,
   filename: string,
+  language?: string,
 ): Promise<TranscribeLocalResult | TranscribeLocalError> {
   // Pre-flight checks
   if (!isModelAvailable()) {
@@ -313,6 +315,21 @@ export async function transcribeLocal(
       message: 'ffmpeg not found. Install it: apt install ffmpeg (Linux) or brew install ffmpeg (macOS)',
     };
   }
+
+  // Resolve the effective language for whisper
+  const effectiveLang = language || config.language || 'en';
+  const isEnModel = activeModel.endsWith('.en');
+
+  // If language is non-English and model is .en, warn and fall back
+  if (effectiveLang !== 'en' && effectiveLang !== 'auto' && isEnModel) {
+    console.warn(
+      `[whisper-local] Language "${effectiveLang}" requested but model "${activeModel}" is English-only. ` +
+      `Falling back to auto-detect. Switch to a multilingual model (e.g. "tiny") for better ${effectiveLang} support.`,
+    );
+  }
+
+  // Build whisper options: .en models only accept 'en'; multilingual accepts any language code
+  const whisperLang = isEnModel ? 'en' : (effectiveLang === 'auto' ? undefined : resolveLanguage(effectiveLang)?.whisperCode || effectiveLang);
 
   const id = randomUUID().slice(0, 8);
   const inputTmp = join(tmpdir(), `nerve-stt-in-${id}-${filename}`);
@@ -332,10 +349,9 @@ export async function transcribeLocal(
 
     // 3. Get/init the singleton context and transcribe
     const ctx = await getContext();
-    const { promise } = ctx.transcribeFile(wavTmp, {
-      language: 'en',
-      temperature: 0.0,
-    });
+    const transcribeOpts: Record<string, unknown> = { temperature: 0.0 };
+    if (whisperLang) transcribeOpts.language = whisperLang;
+    const { promise } = ctx.transcribeFile(wavTmp, transcribeOpts);
 
     const result = await promise;
 

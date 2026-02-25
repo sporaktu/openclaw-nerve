@@ -7,10 +7,45 @@
  */
 
 import { Hono } from 'hono';
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from '../lib/config.js';
+import { SUPPORTED_LANGUAGES, WHISPER_MODEL_FILES } from '../lib/constants.js';
+import { isLanguageSupported, resolveLanguage } from '../lib/language.js';
 import { transcribe as transcribeOpenAI } from '../services/openai-whisper.js';
 import { transcribeLocal, isModelAvailable, getActiveModel, setWhisperModel, getDownloadProgress, getSystemInfo } from '../services/whisper-local.js';
-import { rateLimitTranscribe } from '../middleware/rate-limit.js';
+import { rateLimitTranscribe, rateLimitGeneral } from '../middleware/rate-limit.js';
+
+/** Path to the .env file in the project root. */
+const ENV_PATH = path.resolve(process.cwd(), '.env');
+
+/** Write key=value pairs back to .env, preserving comments and order. */
+function writeEnvKey(key: string, value: string): void {
+  let lines: string[] = [];
+  try {
+    lines = fs.readFileSync(ENV_PATH, 'utf8').split('\n');
+  } catch { /* file doesn't exist yet */ }
+
+  let found = false;
+  const updated = lines.map((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#') || !trimmed) return line;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx < 0) return line;
+    const lineKey = trimmed.slice(0, eqIdx).trim();
+    if (lineKey === key) {
+      found = true;
+      return `${key}=${value}`;
+    }
+    return line;
+  });
+
+  if (!found) {
+    updated.push(`${key}=${value}`);
+  }
+
+  fs.writeFileSync(ENV_PATH, updated.join('\n'));
+}
 
 const MAX_FILE_SIZE = config.limits.transcribe; // 12 MB
 
@@ -51,15 +86,16 @@ app.post('/api/transcribe', rateLimitTranscribe, async (c) => {
     const fileData = Buffer.from(arrayBuf);
     const filename = file.name || 'audio.webm';
 
-    // Route to configured STT provider
+    // Route to configured STT provider (pass language hint)
+    const lang = config.language;
     let result;
     if (config.sttProvider === 'openai') {
       if (!config.openaiApiKey) {
         return c.text('OpenAI API key not configured. Set OPENAI_API_KEY in .env or switch to STT_PROVIDER=local', 500);
       }
-      result = await transcribeOpenAI(fileData, filename, file.type || 'audio/webm');
+      result = await transcribeOpenAI(fileData, filename, file.type || 'audio/webm', lang);
     } else {
-      result = await transcribeLocal(fileData, filename);
+      result = await transcribeLocal(fileData, filename, lang);
     }
 
     if (!result.ok) {
@@ -81,14 +117,18 @@ app.get('/api/transcribe/config', (c) => {
   return c.json({
     provider: config.sttProvider,
     model,
+    language: config.language,
     modelReady: config.sttProvider === 'local' ? isModelAvailable() : true,
     openaiKeySet: !!config.openaiApiKey,
     replicateKeySet: !!config.replicateApiToken,
     hasGpu,
     availableModels: {
-      'tiny.en':  { size: '75MB',  ready: isModelAvailable('tiny.en') },
-      'base.en':  { size: '142MB', ready: isModelAvailable('base.en') },
-      'small.en': { size: '466MB', ready: isModelAvailable('small.en') },
+      'tiny.en':  { size: '75MB',  ready: isModelAvailable('tiny.en'),  multilingual: false },
+      'base.en':  { size: '142MB', ready: isModelAvailable('base.en'),  multilingual: false },
+      'small.en': { size: '466MB', ready: isModelAvailable('small.en'), multilingual: false },
+      'tiny':     { size: '75MB',  ready: isModelAvailable('tiny'),     multilingual: true },
+      'base':     { size: '142MB', ready: isModelAvailable('base'),     multilingual: true },
+      'small':    { size: '466MB', ready: isModelAvailable('small'),    multilingual: true },
     },
     download: download ? {
       model: download.model,
@@ -99,10 +139,10 @@ app.get('/api/transcribe/config', (c) => {
   });
 });
 
-/** PUT /api/transcribe/config — switch STT provider or model at runtime */
+/** PUT /api/transcribe/config — switch STT provider, model, or language at runtime */
 app.put('/api/transcribe/config', async (c) => {
   try {
-    const body = await c.req.json() as { model?: string; provider?: string };
+    const body = await c.req.json() as { model?: string; provider?: string; language?: string };
     const messages: string[] = [];
 
     // Switch provider
@@ -118,14 +158,106 @@ app.put('/api/transcribe/config', async (c) => {
       messages.push(result.message);
     }
 
+    // Switch language
+    if (body.language !== undefined) {
+      const lang = body.language;
+      if (lang !== 'auto' && !SUPPORTED_LANGUAGES.find((l) => l.code === lang)) {
+        return c.text(`Unsupported language: ${lang}. Available: auto, ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
+      }
+      (config as Record<string, unknown>).language = lang;
+      writeEnvKey('LANGUAGE', lang);
+      messages.push(`Language set to ${lang}`);
+    }
+
     return c.json({
       provider: config.sttProvider,
       model: getActiveModel(),
+      language: config.language,
       message: messages.join(', ') || 'No changes',
     });
   } catch {
     return c.text('Invalid request', 400);
   }
+});
+
+// ─── Language API ────────────────────────────────────────────────────────────
+
+/** GET /api/language — current language + supported list + provider compatibility */
+app.get('/api/language', rateLimitGeneral, (c) => {
+  return c.json({
+    language: config.language,
+    edgeVoiceGender: config.edgeVoiceGender,
+    supported: SUPPORTED_LANGUAGES.map((l) => ({
+      code: l.code,
+      name: l.name,
+      nativeName: l.nativeName,
+    })),
+    providers: {
+      edge: isLanguageSupported('edge', config.language),
+      qwen3: isLanguageSupported('qwen3', config.language),
+      openai: isLanguageSupported('openai', config.language),
+    },
+  });
+});
+
+/** PUT /api/language — switch language at runtime (hot-reload) */
+app.put('/api/language', rateLimitGeneral, async (c) => {
+  try {
+    const body = await c.req.json() as { language?: string; edgeVoiceGender?: string };
+
+    if (body.language !== undefined) {
+      const lang = body.language;
+      if (lang !== 'auto' && !SUPPORTED_LANGUAGES.find((l) => l.code === lang)) {
+        return c.text(`Unsupported language: ${lang}. Available: auto, ${SUPPORTED_LANGUAGES.map((l) => l.code).join(', ')}`, 400);
+      }
+      (config as Record<string, unknown>).language = lang;
+      writeEnvKey('LANGUAGE', lang);
+    }
+
+    if (body.edgeVoiceGender !== undefined) {
+      const gender = body.edgeVoiceGender;
+      if (gender !== 'female' && gender !== 'male') {
+        return c.text('edgeVoiceGender must be "female" or "male"', 400);
+      }
+      (config as Record<string, unknown>).edgeVoiceGender = gender;
+      writeEnvKey('EDGE_VOICE_GENDER', gender);
+    }
+
+    return c.json({
+      language: config.language,
+      edgeVoiceGender: config.edgeVoiceGender,
+      providers: {
+        edge: isLanguageSupported('edge', config.language),
+        qwen3: isLanguageSupported('qwen3', config.language),
+        openai: isLanguageSupported('openai', config.language),
+      },
+    });
+  } catch {
+    return c.text('Invalid request', 400);
+  }
+});
+
+/** GET /api/language/support — full compatibility matrix (provider × language) */
+app.get('/api/language/support', rateLimitGeneral, (c) => {
+  const model = getActiveModel();
+  const isMultilingual = !model.endsWith('.en');
+
+  const languages = SUPPORTED_LANGUAGES.map((l) => ({
+    code: l.code,
+    name: l.name,
+    nativeName: l.nativeName,
+    stt: {
+      local: l.code === 'en' || isMultilingual,
+      openai: true, // OpenAI Whisper supports all languages
+    },
+    tts: {
+      edge: true, // All 11 have Edge voices
+      qwen3: l.qwen3Language !== null,
+      openai: true, // OpenAI auto-detects
+    },
+  }));
+
+  return c.json({ languages, currentModel: model, isMultilingual });
 });
 
 export default app;

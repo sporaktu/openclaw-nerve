@@ -21,7 +21,7 @@ const CHROMIUM_FULL_VERSION = '143.0.3650.75';
 const CHROMIUM_MAJOR_VERSION = CHROMIUM_FULL_VERSION.split('.')[0];
 const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`;
 
-import { getTTSConfig } from '../lib/tts-config.js';
+import { getTTSConfig, resolveEdgeTTSVoice } from '../lib/tts-config.js';
 
 const DEFAULT_VOICE = 'en-US-AriaNeural';
 
@@ -77,7 +77,9 @@ export async function synthesizeEdge(
 ): Promise<
   { ok: true; buf: Buffer } | { ok: false; message: string; status: number }
 > {
-  const effectiveVoice = voice || getTTSConfig().edge.voice || DEFAULT_VOICE;
+  // Voice resolution: explicit param > language-aware config > tts-config.json > DEFAULT_VOICE
+  const resolved = resolveEdgeTTSVoice();
+  const effectiveVoice = voice || resolved.voice || getTTSConfig().edge.voice || DEFAULT_VOICE;
   console.log(`[edge-tts] Starting synthesis, voice=${effectiveVoice}`);
   try {
     const buf = await new Promise<Buffer>((resolve, reject) => {

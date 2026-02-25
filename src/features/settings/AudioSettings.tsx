@@ -1,10 +1,84 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Volume2, VolumeX, Mic, MicOff, Download, AlertTriangle, KeyRound } from 'lucide-react';
+import { Volume2, VolumeX, Mic, MicOff, Download, AlertTriangle, KeyRound, Globe } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { InlineSelect } from '@/components/ui/InlineSelect';
 import type { TTSProvider } from '@/features/tts/useTTS';
 import type { STTProvider } from '@/contexts/SettingsContext';
 import { useTTSConfig } from '@/features/tts/useTTSConfig';
+
+// ─── Language types ──────────────────────────────────────────────────────────
+
+interface LanguageInfo {
+  code: string;
+  name: string;
+  nativeName: string;
+}
+
+interface LanguageState {
+  language: string;
+  edgeVoiceGender: string;
+  supported: LanguageInfo[];
+  providers: { edge: boolean; qwen3: boolean; openai: boolean };
+}
+
+interface LanguageSupportEntry {
+  code: string;
+  name: string;
+  nativeName: string;
+  stt: { local: boolean; openai: boolean };
+  tts: { edge: boolean; qwen3: boolean; openai: boolean };
+}
+
+/** Hook to manage language preference via the /api/language endpoints. */
+function useLanguage() {
+  const [state, setState] = useState<LanguageState | null>(null);
+  const [support, setSupport] = useState<LanguageSupportEntry[] | null>(null);
+  const [isMultilingual, setIsMultilingual] = useState(true);
+
+  // Fetch current language on mount
+  useEffect(() => {
+    Promise.all([
+      fetch('/api/language').then((r) => r.json()),
+      fetch('/api/language/support').then((r) => r.json()),
+    ])
+      .then(([langData, supportData]) => {
+        setState(langData);
+        setSupport(supportData.languages);
+        setIsMultilingual(supportData.isMultilingual);
+      })
+      .catch(() => {});
+  }, []);
+
+  const setLanguage = useCallback(async (language: string) => {
+    try {
+      const res = await fetch('/api/language', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setState((prev) => prev ? { ...prev, language: data.language, providers: data.providers } : prev);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const setGender = useCallback(async (edgeVoiceGender: string) => {
+    try {
+      const res = await fetch('/api/language', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edgeVoiceGender }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setState((prev) => prev ? { ...prev, edgeVoiceGender: data.edgeVoiceGender } : prev);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  return { state, support, isMultilingual, setLanguage, setGender };
+}
 
 /** Single-line input that expands into a textarea on focus, collapses on blur. */
 function ExpandableInput({
@@ -140,12 +214,15 @@ function SttModelSelector({ model, onModelChange }: { model: string; onModelChan
           value={model}
           onChange={handleModelChange}
           options={[
-            { value: 'tiny.en', label: 'tiny.en (75MB, fast)' },
-            { value: 'base.en', label: 'base.en (142MB, balanced)' },
-            { value: 'small.en', label: 'small.en (466MB, accurate)' },
+            { value: 'tiny',     label: 'tiny (75MB, multilingual)' },
+            { value: 'base',     label: 'base (142MB, multilingual)' },
+            { value: 'small',    label: 'small (466MB, multilingual)' },
+            { value: 'tiny.en',  label: 'tiny.en (75MB, English only)' },
+            { value: 'base.en',  label: 'base.en (142MB, English only)' },
+            { value: 'small.en', label: 'small.en (466MB, English only)' },
           ]}
           ariaLabel="STT Model"
-          menuClassName="min-w-[220px]"
+          menuClassName="min-w-[250px]"
           dropUp
         />
       </div>
@@ -293,6 +370,7 @@ export function AudioSettings({
 }: AudioSettingsProps) {
   const models = PROVIDER_MODELS[ttsProvider] || [];
   const { config, saved, updateField } = useTTSConfig();
+  const { state: langState, isMultilingual, setLanguage, setGender } = useLanguage();
 
   // Fetch API key status once on mount
   const [apiKeys, setApiKeys] = useState<{ openai: boolean; replicate: boolean }>({ openai: true, replicate: true });
@@ -333,6 +411,82 @@ export function AudioSettings({
         <span className="text-green">◆</span>
         AUDIO
       </h3>
+
+      {/* Language Preference */}
+      {langState && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
+            <div className="flex items-center gap-3">
+              <Globe size={14} className="text-primary" aria-hidden="true" />
+              <span className="text-[12px]">Language</span>
+            </div>
+            <InlineSelect
+              value={langState.language}
+              onChange={setLanguage}
+              options={[
+                { value: 'auto', label: 'Auto-detect' },
+                ...langState.supported.map((l) => ({
+                  value: l.code,
+                  label: `${l.name} — ${l.nativeName}`,
+                })),
+              ]}
+              ariaLabel="Voice Language"
+              menuClassName="min-w-[200px]"
+            />
+          </div>
+
+          {/* Compatibility warnings */}
+          {langState.language !== 'auto' && langState.language !== 'en' && (
+            <>
+              {ttsProvider === 'replicate' && !langState.providers.qwen3 && (
+                <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
+                  <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
+                  <span className="text-[10px] text-orange/80">
+                    Qwen3 doesn't support {langState.supported.find((l) => l.code === langState.language)?.name || langState.language}. Voice output will use English.
+                  </span>
+                </div>
+              )}
+              {!isMultilingual && sttProvider === 'local' && (
+                <div className="flex items-start gap-2 px-3 py-2 bg-background border border-orange/30">
+                  <AlertTriangle size={12} className="text-orange shrink-0 mt-0.5" />
+                  <span className="text-[10px] text-orange/80">
+                    Current model is English-only. Switch to a multilingual model below for {langState.supported.find((l) => l.code === langState.language)?.name || langState.language} transcription.
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Edge TTS voice gender toggle */}
+          {ttsProvider === 'edge' && langState.language !== 'auto' && (
+            <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">
+              <span className="text-[12px]">Voice Gender</span>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setGender('female')}
+                  className={`px-2.5 py-1 text-[10px] font-mono uppercase tracking-wide border transition-colors ${
+                    langState.edgeVoiceGender === 'female'
+                      ? 'bg-primary/20 border-primary text-primary'
+                      : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
+                  }`}
+                >
+                  Female
+                </button>
+                <button
+                  onClick={() => setGender('male')}
+                  className={`px-2.5 py-1 text-[10px] font-mono uppercase tracking-wide border transition-colors ${
+                    langState.edgeVoiceGender === 'male'
+                      ? 'bg-primary/20 border-primary text-primary'
+                      : 'bg-background border-border/60 text-muted-foreground hover:border-muted-foreground'
+                  }`}
+                >
+                  Male
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Sound Effects */}
       <div className="flex items-center justify-between px-3 py-2.5 bg-background border border-border/60 hover:border-muted-foreground transition-colors">

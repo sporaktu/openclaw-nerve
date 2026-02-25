@@ -13,7 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_GATEWAY_URL, DEFAULT_PORT, DEFAULT_SSL_PORT, DEFAULT_HOST, WHISPER_MODEL_FILES } from './constants.js';
+import { DEFAULT_GATEWAY_URL, DEFAULT_PORT, DEFAULT_SSL_PORT, DEFAULT_HOST, WHISPER_MODEL_FILES, WHISPER_DEFAULT_MODEL, DEFAULT_LANGUAGE } from './constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -32,8 +32,12 @@ export const config = {
 
   // Speech-to-text
   sttProvider: (process.env.STT_PROVIDER || 'local') as 'local' | 'openai',
-  whisperModel: process.env.WHISPER_MODEL || 'tiny.en',
+  whisperModel: process.env.WHISPER_MODEL || WHISPER_DEFAULT_MODEL,
   whisperModelDir: process.env.WHISPER_MODEL_DIR || path.join(HOME, '.nerve', 'models'),
+
+  // Language preference (ISO 639-1 code or 'auto' for whisper auto-detect)
+  language: process.env.LANGUAGE || DEFAULT_LANGUAGE,
+  edgeVoiceGender: (process.env.EDGE_VOICE_GENDER || 'female') as 'female' | 'male',
 
   // Gateway connection
   gatewayUrl: process.env.GATEWAY_URL || DEFAULT_GATEWAY_URL,
