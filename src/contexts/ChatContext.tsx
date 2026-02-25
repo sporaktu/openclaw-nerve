@@ -561,8 +561,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           result[result.length - 1]?.role === prev[prev.length - 1]?.role
         ) return; // no change
         applyMessageWindow(result, false); // non-reset: preserve scroll position
-      } catch { /* best-effort */ }
-      subagentPollInFlightRef.current = false;
+      } catch { /* best-effort */ } finally {
+        subagentPollInFlightRef.current = false;
+      }
     }, 3000);
 
     return () => {
