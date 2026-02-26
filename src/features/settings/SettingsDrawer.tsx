@@ -49,7 +49,7 @@ function normalizeSavedCategory(value: string | null): SettingsCategory | null {
 }
 
 const SETTINGS_CATEGORIES = [
-  { key: 'advanced', label: 'Advanced', icon: Shield },
+  { key: 'advanced', label: 'Connection', icon: Shield },
   { key: 'audio', label: 'Audio', icon: Mic },
   { key: 'appearance', label: 'Appearance', icon: Monitor },
 ] as const satisfies ReadonlyArray<{ key: SettingsCategory; label: string; icon: typeof Mic }>;
