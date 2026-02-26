@@ -51,7 +51,8 @@ Create recurring jobs and one-shot reminders. Every scheduled run shows up as it
 | | |
 |---|---|
 | **Streaming chat** | Markdown, syntax highlighting, diff views, image paste, file previews. All rendering as it streams |
-| **File browser** | Browse your workspace, open files in tabs, edit with syntax highlighting. Real-time sync when your agent edits files |
+| **File browser** | Browse your workspace and open files in tabs |
+| **Built-in editor** | CodeMirror editor with syntax highlighting, conflict-safe saves, and automatic lock protection during concurrent agent edits |
 | **Multi-session** | Session tree with sub-agents, per-session model overrides, unread indicators |
 | **Sub-agents** | Spawn background workers with custom models and reasoning levels |
 | **Monitoring** | Token usage, context window meter, cost tracking, activity logs |
