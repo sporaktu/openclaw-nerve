@@ -32,6 +32,7 @@ import serverInfoRoutes from './routes/server-info.js';
 import codexLimitsRoutes from './routes/codex-limits.js';
 import claudeCodeLimitsRoutes from './routes/claude-code-limits.js';
 import versionRoutes from './routes/version.js';
+import versionCheckRoutes from './routes/version-check.js';
 import gatewayRoutes from './routes/gateway.js';
 import connectDefaultsRoutes from './routes/connect-defaults.js';
 import workspaceRoutes from './routes/workspace.js';
@@ -113,7 +114,7 @@ app.use('*', cacheHeaders);
 const routes = [
   healthRoutes, authRoutes, ttsRoutes, transcribeRoutes, agentLogRoutes,
   tokensRoutes, memoriesRoutes, eventsRoutes, serverInfoRoutes,
-  codexLimitsRoutes, claudeCodeLimitsRoutes, versionRoutes,
+  codexLimitsRoutes, claudeCodeLimitsRoutes, versionRoutes, versionCheckRoutes,
   gatewayRoutes, connectDefaultsRoutes,
   workspaceRoutes, cronsRoutes, sessionsRoutes, skillsRoutes, filesRoutes, apiKeysRoutes,
   voicePhrasesRoutes, fileBrowserRoutes,

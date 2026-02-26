@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ContextMeter } from './ContextMeter';
+import { UpdateBadge } from './UpdateBadge';
 import { useGateway } from '@/contexts/GatewayContext';
 
 /** Props for {@link StatusBar}. */
@@ -162,6 +163,7 @@ export function StatusBar({ connectionState, sessionCount, sparkline, contextTok
         <span className="text-muted-foreground text-[10px] tracking-[-1px]">{sparkline}</span>
         <span className="text-primary font-bold animate-alive ml-0.5">_</span>
         <span className="text-muted-foreground/40 text-[9px] tracking-wide ml-2">v{__APP_VERSION__}</span>
+        <UpdateBadge />
       </div>
     </div>
   );
