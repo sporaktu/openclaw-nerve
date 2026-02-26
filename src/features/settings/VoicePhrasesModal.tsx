@@ -65,7 +65,9 @@ function PhraseList({
           />
           {phrases.length > 1 && (
             <button
+              type="button"
               onClick={() => onRemove(i)}
+              aria-label={`Remove ${placeholder.toLowerCase()} ${i + 1}`}
               className="p-1 text-muted-foreground hover:text-red-400 transition-colors"
             >
               <Trash2 size={12} />
@@ -100,7 +102,9 @@ export function VoicePhrasesModal({
   useEffect(() => {
     if (!open || !languageCode) return;
     setSaveError(null);
-    fetch(`/api/voice-phrases/${languageCode}`)
+
+    const controller = new AbortController();
+    fetch(`/api/voice-phrases/${languageCode}`, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`Failed to load phrases (${r.status})`);
         return r.json();
@@ -110,11 +114,14 @@ export function VoicePhrasesModal({
         setStopPhrases(data.stopPhrases.length > 0 ? data.stopPhrases : ['']);
         setCancelPhrases(data.cancelPhrases.length > 0 ? data.cancelPhrases : ['']);
       })
-      .catch(() => {
+      .catch((err) => {
+        if ((err as DOMException)?.name === 'AbortError' || controller.signal.aborted) return;
         setWakePhrase('');
         setStopPhrases(['']);
         setCancelPhrases(['']);
       });
+
+    return () => controller.abort();
   }, [open, languageCode]);
 
   const updatePhrase = useCallback(

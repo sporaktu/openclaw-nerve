@@ -32,6 +32,12 @@ describe('upsertEnvContent', () => {
     const out = upsertEnvContent('FOO=1', 'BAR', '2');
     expect(out).toBe('FOO=1\nBAR=2\n');
   });
+
+  it('rejects multi-line env values', () => {
+    expect(() => upsertEnvContent('FOO=1\n', 'BAR', 'x\ny')).toThrow(
+      'Invalid env value for BAR: multi-line values are not supported',
+    );
+  });
 });
 
 describe('writeEnvKey', () => {

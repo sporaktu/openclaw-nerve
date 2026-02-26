@@ -83,7 +83,6 @@ export function SettingsDrawer({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const isConnected = connectionState === 'connected' || connectionState === 'reconnecting';
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>(() => {
-    if (!isConnected) return 'advanced';
     try {
       return normalizeSavedCategory(localStorage.getItem(SETTINGS_CATEGORY_KEY)) || 'advanced';
     } catch {

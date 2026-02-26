@@ -77,18 +77,21 @@ function useLanguage() {
     };
   }, []);
 
-  const setLanguage = useCallback(async (language: string) => {
+  const setLanguage = useCallback(async (language: string): Promise<boolean> => {
     try {
       const res = await fetch('/api/language', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ language }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setState((prev) => prev ? { ...prev, language: data.language, providers: data.providers } : prev);
-      }
-    } catch { /* ignore */ }
+      if (!res.ok) return false;
+
+      const data = await res.json();
+      setState((prev) => prev ? { ...prev, language: data.language, providers: data.providers } : prev);
+      return true;
+    } catch {
+      return false;
+    }
   }, []);
 
   const setGender = useCallback(async (edgeVoiceGender: string) => {
@@ -434,7 +437,10 @@ export function AudioSettings({
   const [activeWakePhrase, setActiveWakePhrase] = useState('');
   useEffect(() => {
     fetch('/api/voice-phrases/status')
-      .then(r => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error('Failed to fetch phrase status');
+        return r.json();
+      })
       .then(setPhrasesStatus)
       .catch(() => {});
   }, [phrasesModal.open]); // Refetch after modal closes (might have saved)
@@ -464,9 +470,11 @@ export function AudioSettings({
 
   // Keep language switches lightweight; phrase editing is explicit via the CTA button.
   const handleLanguageChange = useCallback((code: string) => {
-    setLanguage(code);
-    // Notify InputBar that language changed
-    window.dispatchEvent(new CustomEvent('nerve:language-changed'));
+    void setLanguage(code).then((saved) => {
+      if (!saved) return;
+      // Notify InputBar after language update succeeds
+      window.dispatchEvent(new CustomEvent('nerve:language-changed'));
+    });
   }, [setLanguage]);
 
   const currentLangInfo = useMemo(() => {

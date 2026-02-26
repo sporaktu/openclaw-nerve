@@ -21,6 +21,9 @@ export function upsertEnvContent(content: string, key: string, value: string): s
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envKey)) {
     throw new Error(`Invalid env key: ${key}`);
   }
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`Invalid env value for ${envKey}: multi-line values are not supported`);
+  }
 
   const eol = detectLineEnding(content);
   const lines = content.length > 0 ? content.split(/\r?\n/) : [];

@@ -143,8 +143,12 @@ app.put('/api/transcribe/config', async (c) => {
       language: config.language,
       message: messages.join(', ') || 'No changes',
     });
-  } catch {
-    return c.text('Invalid request', 400);
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return c.text('Invalid request', 400);
+    }
+    console.error('[transcribe-config] update failed:', err);
+    return c.text('Failed to update transcription config', 500);
   }
 });
 
@@ -200,8 +204,12 @@ app.put('/api/language', rateLimitGeneral, async (c) => {
         openai: isLanguageSupported('openai', config.language),
       },
     });
-  } catch {
-    return c.text('Invalid request', 400);
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return c.text('Invalid request', 400);
+    }
+    console.error('[language] update failed:', err);
+    return c.text('Failed to update language settings', 500);
   }
 });
 

@@ -60,7 +60,10 @@ export const config = {
   // Language preference (ISO 639-1). Invalid/auto values are normalized to English.
   // Primary env key: NERVE_LANGUAGE. Legacy LANGUAGE is still accepted as fallback.
   language: normalizeLanguagePreference(LANGUAGE_ENV_VALUE),
-  edgeVoiceGender: (process.env.EDGE_VOICE_GENDER || 'female') as 'female' | 'male',
+  edgeVoiceGender:
+    process.env.EDGE_VOICE_GENDER === 'male' || process.env.EDGE_VOICE_GENDER === 'female'
+      ? process.env.EDGE_VOICE_GENDER
+      : 'female',
 
   // Gateway connection
   gatewayUrl: process.env.GATEWAY_URL || DEFAULT_GATEWAY_URL,
