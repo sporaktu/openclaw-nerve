@@ -93,6 +93,8 @@ function matchesPhrase(transcript: string, phrases: string[], language: string):
  *
  * @param onTranscription - Callback invoked with the cleaned transcription text.
  * @param agentName - Agent display name used to build dynamic wake phrases.
+ * @param language - Active language code used for recognition and phrase matching.
+ * @param phrasesVersion - Incrementing token to force phrase reloads after config edits.
  */
 /** Map ISO 639-1 language code to BCP-47 locale for Web Speech API. */
 export const LANG_TO_BCP47: Record<string, string> = {
@@ -130,7 +132,12 @@ export function resolveRecognitionLang(language: string): string {
   return LANG_TO_BCP47.en;
 }
 
-export function useVoiceInput(onTranscription: (text: string) => void, agentName: string = 'Agent', language: string = 'en') {
+export function useVoiceInput(
+  onTranscription: (text: string) => void,
+  agentName: string = 'Agent',
+  language: string = 'en',
+  phrasesVersion: number = 0,
+) {
   const [state, setState] = useState<VoiceState>('idle');
   const stateRef = useRef<VoiceState>('idle');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -155,12 +162,12 @@ export function useVoiceInput(onTranscription: (text: string) => void, agentName
   // Single primary wake phrase based on agent name + selected language.
   const defaultWakePhrase = useMemo(() => buildPrimaryWakePhrase(agentName, language), [agentName, language]);
 
-  // Phrases loaded from server config — refetch when language changes
+  // Phrases loaded from server config — refetch when language or phrase config changes
   const [phrases, setPhrases] = useState<VoicePhrases>(phrasesCache?.phrases || DEFAULT_PHRASES);
   useEffect(() => {
     invalidatePhrasesCache();
     fetchVoicePhrases(language).then(setPhrases);
-  }, [language]);
+  }, [language, phrasesVersion]);
 
   // Use a single wake phrase per language (custom phrase wins over generated default).
   const wakePhrases = useMemo(() => {

@@ -866,8 +866,8 @@ export function AudioSettings({
         open={phrasesModal.open}
         onClose={() => {
           setPhrasesModal(prev => ({ ...prev, open: false }));
-          // Phrases may have been saved — notify voice input to refetch
-          window.dispatchEvent(new CustomEvent('nerve:language-changed'));
+          // Phrases may have changed — notify voice input to refetch phrase config.
+          window.dispatchEvent(new CustomEvent('nerve:voice-phrases-changed'));
         }}
         languageCode={phrasesModal.code}
         languageName={phrasesModal.name}

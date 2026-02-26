@@ -65,6 +65,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   // Fetch current language for voice phrase matching
   const [voiceLang, setVoiceLang] = useState('en');
+  const [voicePhrasesVersion, setVoicePhrasesVersion] = useState(0);
+
   useEffect(() => {
     let currentController: AbortController | null = null;
 
@@ -85,18 +87,24 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         });
     };
 
+    const handlePhrasesChanged = () => {
+      setVoicePhrasesVersion((v) => v + 1);
+    };
+
     fetchLang();
     // Listen for language changes from settings
     window.addEventListener('nerve:language-changed', fetchLang);
+    window.addEventListener('nerve:voice-phrases-changed', handlePhrasesChanged);
     return () => {
       window.removeEventListener('nerve:language-changed', fetchLang);
+      window.removeEventListener('nerve:voice-phrases-changed', handlePhrasesChanged);
       currentController?.abort();
     };
   }, []);
 
   const { voiceState, wakeWordEnabled, toggleWakeWord } = useVoiceInput((text) => {
     onSend('[voice] ' + text);
-  }, agentName, voiceLang);
+  }, agentName, voiceLang, voicePhrasesVersion);
 
   const processFiles = useCallback((files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
