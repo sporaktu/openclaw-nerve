@@ -228,7 +228,7 @@ app.get('/api/language/support', rateLimitGeneral, (c) => {
       openai: true, // OpenAI Whisper supports all languages
     },
     tts: {
-      edge: true, // All 11 have Edge voices
+      edge: true, // All supported languages have Edge voices
       qwen3: l.qwen3Language !== null,
       openai: true, // OpenAI auto-detects
     },
