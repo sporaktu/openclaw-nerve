@@ -20,6 +20,7 @@ import { rateLimitGeneral } from '../middleware/rate-limit.js';
 import { broadcast } from './events.js';
 import { withMutex } from '../lib/mutex.js';
 import type { MemoryItem } from '../types.js';
+import { REMOTE_WORKSPACE, readRemoteFile, listRemoteDir } from '../lib/gateway-files.js';
 
 const app = new Hono();
 
@@ -182,6 +183,70 @@ async function deleteMemory(opts: DeleteOptions): Promise<{ deleted: boolean; fi
 // invokeGatewayTool imported from shared module
 
 /**
+ * Parse memory content string into MemoryItem array (sections + items)
+ */
+function parseMemoryContent(content: string, type: 'section' | 'daily' = 'section', date?: string): MemoryItem[] {
+  const items: MemoryItem[] = [];
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('## ')) {
+      const item: MemoryItem = { type: type === 'daily' ? 'daily' : 'section', text: trimmed.slice(3).trim() };
+      if (date) item.date = date;
+      items.push(item);
+    } else if (type !== 'daily' && (/^[-*]\s+/.test(trimmed) || /^\d+\.\s/.test(trimmed))) {
+      const clean = trimmed
+        .replace(/^[-*]\s+|^\d+\.\s+/, '')
+        .replace(/\*\*/g, '')
+        .replace(/`/g, '');
+      if (clean.length > 0) {
+        items.push({ type: 'item', text: clean });
+      }
+    }
+  }
+  return items;
+}
+
+/**
+ * GET /api/memories in remote workspace mode
+ */
+async function getRemoteMemories(c: any) {
+  const memories: MemoryItem[] = [];
+
+  // Read MEMORY.md remotely
+  const content = await readRemoteFile('MEMORY.md');
+  if (content) {
+    memories.push(...parseMemoryContent(content));
+  }
+
+  // Try to discover daily files via listRemoteDir, then read recent ones
+  const dailyFiles = await listRemoteDir('memory');
+  const recentFiles = dailyFiles.sort().reverse().slice(0, 7);
+
+  for (const dateName of recentFiles) {
+    const dailyContent = await readRemoteFile(`memory/${dateName}.md`);
+    if (dailyContent) {
+      memories.push(...parseMemoryContent(dailyContent, 'daily', dateName));
+    }
+  }
+
+  // If no daily files found via listing, try recent dates as fallback
+  if (recentFiles.length === 0) {
+    const today = new Date();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const dailyContent = await readRemoteFile(`memory/${dateStr}.md`);
+      if (dailyContent) {
+        memories.push(...parseMemoryContent(dailyContent, 'daily', dateStr));
+      }
+    }
+  }
+
+  return c.json(memories);
+}
+
+/**
  * Append a bullet point to MEMORY.md under the given section heading.
  * If the section doesn't exist, create it at the end of the file.
  */
@@ -244,6 +309,10 @@ async function appendToMemoryFile(text: string, section: string): Promise<void> 
 }
 
 app.get('/api/memories', rateLimitGeneral, async (c) => {
+  if (REMOTE_WORKSPACE) {
+    return await getRemoteMemories(c);
+  }
+
   const memories: MemoryItem[] = [];
 
   // Parse MEMORY.md — sections and bullet points
@@ -303,6 +372,29 @@ app.get('/api/memories', rateLimitGeneral, async (c) => {
  * Returns: { ok: true, content: string } or { ok: false, error: string }
  */
 app.get('/api/memories/section', rateLimitGeneral, async (c) => {
+  if (REMOTE_WORKSPACE) {
+    const title = c.req.query('title');
+    const date = c.req.query('date');
+    if (!title) return c.json({ ok: false, error: 'Missing title parameter' }, 400);
+    const filePath = date ? `memory/${date}.md` : 'MEMORY.md';
+    const content = await readRemoteFile(filePath);
+    if (!content) return c.json({ ok: false, error: 'File not found' }, 404);
+    const lines = content.split('\n');
+    let sectionStart = -1;
+    let sectionEnd = lines.length;
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (sectionStart === -1) {
+        if (trimmed.startsWith('## ') && trimmed.slice(3).trim() === title) sectionStart = i;
+      } else if (trimmed.startsWith('## ')) {
+        sectionEnd = i;
+        break;
+      }
+    }
+    if (sectionStart === -1) return c.json({ ok: false, error: 'Section not found' }, 404);
+    return c.json({ ok: true, content: lines.slice(sectionStart + 1, sectionEnd).join('\n').trim() });
+  }
+
   const title = c.req.query('title');
   const date = c.req.query('date');
 
@@ -380,6 +472,10 @@ app.post(
     }
   }),
   async (c) => {
+    if (REMOTE_WORKSPACE) {
+      return c.json({ ok: false, error: 'Read-only in remote workspace mode' }, 501);
+    }
+
     try {
       const body = c.req.valid('json');
       const trimmedText = body.text.trim();
@@ -433,6 +529,10 @@ app.put(
     }
   }),
   async (c) => {
+    if (REMOTE_WORKSPACE) {
+      return c.json({ ok: false, error: 'Read-only in remote workspace mode' }, 501);
+    }
+
     try {
       const { title, content, date } = c.req.valid('json');
 
@@ -534,6 +634,10 @@ app.delete(
     }
   }),
   async (c) => {
+    if (REMOTE_WORKSPACE) {
+      return c.json({ ok: false, error: 'Read-only in remote workspace mode' }, 501);
+    }
+
     try {
       const body = c.req.valid('json');
 

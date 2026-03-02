@@ -13,6 +13,7 @@ import path from 'node:path';
 import { config } from '../lib/config.js';
 import { readText } from '../lib/files.js';
 import { rateLimitGeneral } from '../middleware/rate-limit.js';
+import { REMOTE_WORKSPACE, readRemoteFile } from '../lib/gateway-files.js';
 
 const app = new Hono();
 
@@ -36,9 +37,17 @@ function resolveFile(key: string): string | null {
 }
 
 app.get('/api/workspace/:key', rateLimitGeneral, async (c) => {
-  const filePath = resolveFile(c.req.param('key'));
-  if (!filePath) return c.json({ ok: false, error: 'Unknown file key' }, 400);
+  const key = c.req.param('key');
+  const filename = FILE_MAP[key];
+  if (!filename) return c.json({ ok: false, error: 'Unknown file key' }, 400);
 
+  if (REMOTE_WORKSPACE) {
+    const content = await readRemoteFile(filename);
+    if (content === null) return c.json({ ok: false, error: 'File not found' }, 404);
+    return c.json({ ok: true, content });
+  }
+
+  const filePath = path.join(workspacePath, filename);
   try {
     await fs.access(filePath);
   } catch {
@@ -50,6 +59,10 @@ app.get('/api/workspace/:key', rateLimitGeneral, async (c) => {
 });
 
 app.put('/api/workspace/:key', rateLimitGeneral, async (c) => {
+  if (REMOTE_WORKSPACE) {
+    return c.json({ ok: false, error: 'Read-only in remote workspace mode' }, 501);
+  }
+
   const filePath = resolveFile(c.req.param('key'));
   if (!filePath) return c.json({ ok: false, error: 'Unknown file key' }, 400);
 
@@ -74,6 +87,16 @@ app.put('/api/workspace/:key', rateLimitGeneral, async (c) => {
 /** List available workspace file keys and their existence status */
 app.get('/api/workspace', rateLimitGeneral, async (c) => {
   const files: Array<{ key: string; filename: string; exists: boolean }> = [];
+
+  if (REMOTE_WORKSPACE) {
+    // Check existence by attempting to read each file remotely
+    for (const [key, filename] of Object.entries(FILE_MAP)) {
+      const content = await readRemoteFile(filename);
+      files.push({ key, filename, exists: content !== null });
+    }
+    return c.json({ ok: true, files });
+  }
+
   for (const [key, filename] of Object.entries(FILE_MAP)) {
     const filePath = path.join(workspacePath, filename);
     let exists = false;

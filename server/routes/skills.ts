@@ -9,6 +9,7 @@ import { execFile, type ExecFileException } from 'node:child_process';
 import { dirname } from 'node:path';
 import { rateLimitGeneral } from '../middleware/rate-limit.js';
 import { resolveOpenclawBin } from '../lib/openclaw-bin.js';
+import { REMOTE_WORKSPACE } from '../lib/gateway-files.js';
 
 const app = new Hono();
 
@@ -143,6 +144,10 @@ function execOpenclawSkills(): Promise<RawSkill[]> {
 }
 
 app.get('/api/skills', rateLimitGeneral, async (c) => {
+  if (REMOTE_WORKSPACE) {
+    return c.json({ ok: true, skills: [], remoteMode: true });
+  }
+
   try {
     const skills = await execOpenclawSkills();
     return c.json({ ok: true, skills });
