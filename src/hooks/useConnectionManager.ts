@@ -61,13 +61,24 @@ export function useConnectionManager(): ConnectionManagerState {
     if (autoConnectAttempted.current) return;
     autoConnectAttempted.current = true;
 
-    const saved = loadConfig();
-    if (saved.url && saved.token) return; // Already pre-filled by useState initializers
-
-    // No saved config — try to get defaults from the server to pre-fill
+    // Always fetch server defaults — they may have changed (e.g. reverse proxy setup).
+    // Auto-connect when both URL and token are available from the server.
     fetchConnectDefaults().then((defaults) => {
-      if (defaults?.wsUrl) setEditableUrl(defaults.wsUrl);
-      if (defaults?.token) setEditableToken(defaults.token);
+      if (defaults?.wsUrl && defaults?.token) {
+        setEditableUrl(defaults.wsUrl);
+        setEditableToken(defaults.token);
+        // Auto-connect when server provides full credentials
+        saveConfig(defaults.wsUrl, defaults.token);
+        connect(defaults.wsUrl, defaults.token)
+          .then(() => setDialogOpen(false))
+          .catch(() => { /* show dialog on failure */ });
+      } else {
+        // Fall back to saved config
+        const saved = loadConfig();
+        if (saved.url && saved.token) return;
+        if (defaults?.wsUrl) setEditableUrl(defaults.wsUrl);
+        if (defaults?.token) setEditableToken(defaults.token);
+      }
     });
   }, []);
 

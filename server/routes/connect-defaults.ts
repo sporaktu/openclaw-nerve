@@ -28,9 +28,12 @@ app.get('/api/connect-defaults', rateLimitGeneral, (c) => {
   } catch {
     // fallback: not available in some test environments
   }
-  const isLoopback = LOOPBACK_RE.test(remoteIp);
+  const trustAllClients = (process.env.NERVE_TRUST_ALL_CLIENTS ?? '').toLowerCase() === 'true';
+  const isLoopback = trustAllClients || LOOPBACK_RE.test(remoteIp);
 
   // Derive WebSocket URL from the HTTP gateway URL
+  // The frontend proxies this through Nerve's /ws endpoint automatically,
+  // so this should be the internal gateway address (not the public Nerve URL).
   const gwUrl = config.gatewayUrl;
   let wsUrl = '';
   try {
